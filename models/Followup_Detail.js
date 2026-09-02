@@ -12,14 +12,14 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: true,
         field: "LAST_FOLLOWUP_DATE",
       },
-     FOLLOWUP_TIME: {
+      FOLLOWUP_TIME: {
         type: DataTypes.TIME,     // MSSQL time
         allowNull: true,
         field: "FOLLOWUP_TIME",
       },
 
       CALL_ID: { type: DataTypes.STRING(100), allowNull: true, field: "call_id" },
-     EXPORT_TYPE: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 }, // ✅ add this
+      EXPORT_TYPE: { type: DataTypes.INTEGER, allowNull: false, defaultValue: 1 }, // ✅ add this
 
 
       REMARKS: { type: DataTypes.STRING(100), allowNull: true },

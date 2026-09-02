@@ -14,8 +14,8 @@ const Insu_Renewal_Pymt = function (sequelize, DataTypes) {
       },
 
       INSU_TYPE: {
-        type: DataTypes.INTEGER,
-        allowNull: false,
+        type: DataTypes.STRING(200),
+        allowNull: true,
       },
 
       PREMIUM_AMOUNT: {
@@ -25,13 +25,13 @@ const Insu_Renewal_Pymt = function (sequelize, DataTypes) {
 
       PYMT_MODE: {
         type: DataTypes.STRING(100),
-        allowNull: false,
+        allowNull: true,
       },
 
       // ✅ only once
       PYMT_DATE: {
         type: DataTypes.DATEONLY,
-        allowNull: false,
+        allowNull: true,
       },
 
       PYMT_AMOUNT: {
@@ -45,7 +45,7 @@ const Insu_Renewal_Pymt = function (sequelize, DataTypes) {
       },
 
       PYMT_REMARK: {
-        type: DataTypes.STRING(100),
+        type: DataTypes.STRING(255),
         allowNull: true,
       },
 
@@ -60,7 +60,7 @@ const Insu_Renewal_Pymt = function (sequelize, DataTypes) {
       },
 
       ACNT_APPR_REMARK: {
-        type: DataTypes.STRING(100),
+        type: DataTypes.STRING(255),
         allowNull: true,
       },
 
@@ -80,7 +80,7 @@ const Insu_Renewal_Pymt = function (sequelize, DataTypes) {
       },
 
       UTR: {
-        type: DataTypes.INTEGER, // (agar UTR alpha-numeric hota hai to VARCHAR better)
+        type: DataTypes.STRING(100),
         allowNull: true,
       },
 
@@ -90,7 +90,7 @@ const Insu_Renewal_Pymt = function (sequelize, DataTypes) {
       },
 
       REMARKS: {
-        type: DataTypes.STRING(100),
+        type: DataTypes.STRING(255),
         allowNull: true,
       },
 
@@ -100,25 +100,24 @@ const Insu_Renewal_Pymt = function (sequelize, DataTypes) {
       },
 
       DOC_PATH: {
-        type: DataTypes.STRING(100),
+        type: DataTypes.STRING(500),
         allowNull: true,
       },
 
       CREATED_AT: {
         type: DataTypes.DATE,
         allowNull: false,
-        // DB default GETDATE() hai, phir bhi safe
         defaultValue: Sequelize.literal("GETDATE()"),
       },
 
       // Temporal columns (GENERATED ALWAYS) -> insert/update me mat bhejna
       VALIDFROM: {
         type: DataTypes.DATE,
-        allowNull: false,
+        allowNull: true,
       },
       VALIDTO: {
         type: DataTypes.DATE,
-        allowNull: false,
+        allowNull: true,
       },
     },
     {

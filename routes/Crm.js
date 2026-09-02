@@ -2,7 +2,7 @@ const ExcelJS = require("exceljs");
 const { DataTypes, Op } = require("sequelize");
 const { dbname } = require("../utils/dbconfig");
 const xlsx = require("xlsx");
-const { Insu_Renewal, insuRenewalSchema } = require("../models/excelImport");
+const { Insu_Renewal } = require("../models/excelImport");
 const Sequelize = require("sequelize");
 const { Insu_Renewal_Mst } = require("../models/InsuRenewalMst");
 const FollowupDetailModel = require("../models/Followup_Detail");
@@ -17,14 +17,12 @@ const {
 } = require("./bonvoice");
 const jwt = require("jsonwebtoken");
 const {
-  triggerBatchCalls,
   triggerSingleCall,
-  getCallStatus,
-  getCallRecording,
+  getCallStatus1,
+  getCallRecording1,
 } = require("./callmatics");
 const { QueryTypes } = require("sequelize");
-const Campain_ID = require("./callmatics");
-const cron = require("node-cron");
+// const Campain_ID = require("./callmatics");
 const { Insu_Renewal_Raw_Data } = require("../models/Insu_Renewal_Raw_Data")
 const { SendWhatsAppMessgae } = require("./user");
 
@@ -81,7 +79,7 @@ exports.downloadInsuranceRenualSampleExcel = async (req, res) => {
   );
   res.setHeader(
     "Content-Disposition",
-    'attachment; filename="INSURANCE_TEMPLATEx"',
+    'attachment; filename="INSURANCE_TEMPLATE.xlsx"',
   );
 
   await wb.xlsx.write(res);
@@ -155,16 +153,29 @@ exports.importInsuRenewalExcel = async function (req, res, next) {
     }
 
     const locCodeRaw =
-      req.body?.branch ?? req.body?.loc_code ?? req.body?.Loc_Code ?? null;
-    const locCodeFinal =
-      locCodeRaw !== null &&
-        locCodeRaw !== undefined &&
-        String(locCodeRaw).trim() !== "" &&
-        !String(locCodeRaw).includes(",")
-        ? Number(String(locCodeRaw).trim())
-        : null;
+      req.body?.branch ??
+      req.body?.loc_code ??
+      req.body?.Loc_Code ??
+      req.headers?.loc_code ??
+      req.headers?.branch ??
+      null;
 
-    const locCodeToSave = Number.isFinite(locCodeFinal) ? locCodeFinal : null;
+    let locCodeToSave = null;
+    if (locCodeRaw != null && String(locCodeRaw).trim() !== "") {
+      const parts = String(locCodeRaw).split(",").map((p) => p.trim()).filter(Boolean);
+      for (const p of parts) {
+        const n = Number(p);
+        if (Number.isFinite(n) && n > 0) {
+          locCodeToSave = n;
+          break;
+        }
+      }
+      if (locCodeToSave === null) {
+        const n = Number(String(locCodeRaw).trim());
+        if (Number.isFinite(n) && n > 0) locCodeToSave = n;
+      }
+    }
+
     console.log(
       "[IMPORT] locCodeRaw:",
       locCodeRaw,
@@ -182,7 +193,6 @@ exports.importInsuRenewalExcel = async function (req, res, next) {
     // ✅ DATE HELPERS (SAME AS IMPORTWARRANTY)
     // =========================================================
 
-    // ✅ Helper function to parse dates from Excel cells (same as Warranty API)
     function parseDateFromCell(cell) {
       if (!cell || !cell.v) return null;
 
@@ -430,20 +440,27 @@ exports.importInsuRenewalExcel = async function (req, res, next) {
 
             if (mstExisting) {
               tranId = mstExisting.UTD;
+              if (locCodeToSave != null) {
+                await sequelize.query(
+                  `UPDATE dbo.INSU_RENEWAL_MST
+                   SET LOC_CODE = :locCode, EXPORT_TYPE = 1
+                   WHERE UTD = :utd`,
+                  {
+                    replacements: { locCode: locCodeToSave, utd: tranId },
+                    transaction: t,
+                  },
+                );
+              }
             } else {
               // ✅ APPLY LOC_CODE while creating MST
               const mstCreateObj = {
                 VEHICAL_REG_NO: regNo,
                 EXPORT_TYPE: 1,
+                LOC_CODE: locCodeToSave,
                 CREATED_AT: Sequelize.literal("GETDATE()"),
               };
 
-              const mstFields = ["VEHICAL_REG_NO", "EXPORT_TYPE", "CREATED_AT"];
-
-              if (mstLocAttr) {
-                mstCreateObj[mstLocAttr] = locCodeToSave;
-                mstFields.push(mstLocAttr);
-              }
+              const mstFields = ["VEHICAL_REG_NO", "EXPORT_TYPE", "LOC_CODE", "CREATED_AT"];
 
               const mstNew = await InsuRenewalMst.create(mstCreateObj, {
                 transaction: t,
@@ -457,7 +474,7 @@ exports.importInsuRenewalExcel = async function (req, res, next) {
               if (tranId && locCodeToSave != null) {
                 await sequelize.query(
                   `UPDATE dbo.INSU_RENEWAL_MST
-                   SET loc_code = :locCode
+                   SET LOC_CODE = :locCode, EXPORT_TYPE = 1
                    WHERE UTD = :utd`,
                   {
                     replacements: { locCode: locCodeToSave, utd: tranId },
@@ -691,11 +708,11 @@ exports.getInsuRenewalByDateRange = async function (req, res, next) {
     // LOGIN EMPLOYEE KA BRANCH NIKALO
     // =========================================================
     const empBranchSql = `
-      SELECT TOP 1
-        loc_code
-      FROM EMPLOYEEMASTER
-      WHERE EMPCODE = :empcode
-    `;
+        SELECT TOP 1
+          loc_code
+        FROM EMPLOYEEMASTER
+        WHERE EMPCODE = :empcode
+      `;
 
     const empBranchData = await sequelize.query(empBranchSql, {
       replacements: {
@@ -719,17 +736,17 @@ exports.getInsuRenewalByDateRange = async function (req, res, next) {
     // LOGIN EMPLOYEE KE UNDER REPORTING EMPLOYEES
     // =========================================================
     const reportingSql = `
-      SELECT DISTINCT
-        EMPCODE
-      FROM EMPLOYEEMASTER
-      WHERE
-        (
-          Reporting_1 = :empcode
-          OR Reporting_2 = :empcode
-          OR Reporting_3 = :empcode
-        )
-        AND loc_code = :userBranch
-    `;
+        SELECT DISTINCT
+          EMPCODE
+        FROM EMPLOYEEMASTER
+        WHERE
+          (
+            Reporting_1 = :empcode
+            OR Reporting_2 = :empcode
+            OR Reporting_3 = :empcode
+          )
+          AND loc_code = :userBranch
+      `;
 
     const reportingEmps = await sequelize.query(reportingSql, {
       replacements: {
@@ -758,16 +775,6 @@ exports.getInsuRenewalByDateRange = async function (req, res, next) {
     // Duplicate remove
     const uniqueEmpCodes = [...new Set(reportingEmpCodes)];
 
-    console.log("========================================");
-    console.log("INSURANCE RENEWAL DATE FILTER");
-    console.log("========================================");
-    console.log("Login empcode:", empcode);
-    console.log("Login emp_dms_code:", emp_dms_code);
-    console.log("User branch:", userBranch);
-    console.log("From date:", fromFinal);
-    console.log("To date:", toFinal);
-    console.log("Subordinate empcodes:", uniqueEmpCodes);
-    console.log("========================================");
 
     // =========================================================
     // STEP 4
@@ -783,18 +790,19 @@ exports.getInsuRenewalByDateRange = async function (req, res, next) {
       userBranch,
     };
 
-    // अगर emp_dms_code है, तो सभी data show करो (Admin)
-    if (emp_dms_code && String(emp_dms_code).trim() !== "") {
+    const isAdmin =
+      String(emp_dms_code || "").trim().toUpperCase() === "EDP";
+    if (isAdmin) {
       console.log("✅ ADMIN MODE: Showing all data");
       // Admin mode: सभी data दिखाओ, कोई employee filter नहीं
       whereCondition = `
-        WHERE
-          ISNULL(r.EXPORT_TYPE, 0) = 1
-          AND ISNULL(m.EXPORT_TYPE, 0) = 1
-          AND TRY_CONVERT(date, r.CREATED_AT)
-              BETWEEN :fromFinal AND :toFinal
-          AND m.loc_code = :userBranch
-      `;
+          WHERE
+            ISNULL(r.EXPORT_TYPE, 1) = 1
+            AND ISNULL(m.EXPORT_TYPE, 1) <> 33
+            AND TRY_CONVERT(date, r.CREATED_AT)
+                BETWEEN :fromFinal AND :toFinal
+            AND (m.loc_code = :userBranch OR m.loc_code IS NULL OR m.loc_code = 0 OR :userBranch IS NULL)
+        `;
     } else {
       // Normal mode: सिर्फ subordinates का data
       console.log("👤 EMPLOYEE MODE: Showing subordinate data only");
@@ -812,14 +820,14 @@ exports.getInsuRenewalByDateRange = async function (req, res, next) {
       });
 
       whereCondition = `
-        WHERE
-          ISNULL(r.EXPORT_TYPE, 0) = 1
-          AND ISNULL(m.EXPORT_TYPE, 0) = 1
-          AND TRY_CONVERT(date, r.CREATED_AT)
-              BETWEEN :fromFinal AND :toFinal
-          AND m.loc_code = :userBranch
-          AND r.DSC_EMPCODE IN (${employeePlaceholders})
-      `;
+          WHERE
+            ISNULL(r.EXPORT_TYPE, 1) = 1
+            AND ISNULL(m.EXPORT_TYPE, 1) <> 33
+            AND TRY_CONVERT(date, r.CREATED_AT)
+                BETWEEN :fromFinal AND :toFinal
+            AND (m.loc_code = :userBranch OR m.loc_code IS NULL OR m.loc_code = 0 OR :userBranch IS NULL)
+            AND (r.DSC_EMPCODE IN (${employeePlaceholders}))
+        `;
     }
 
     // =========================================================
@@ -828,17 +836,17 @@ exports.getInsuRenewalByDateRange = async function (req, res, next) {
     // =========================================================
 
     const sql = `
-      SELECT
-        r.*
-      FROM dbo.INSU_RENEWAL r
+        SELECT
+          r.*
+        FROM dbo.INSU_RENEWAL r
 
-      INNER JOIN dbo.INSU_RENEWAL_MST m
-        ON m.UTD = r.TRAN_ID
+        INNER JOIN dbo.INSU_RENEWAL_MST m
+          ON m.UTD = r.TRAN_ID
 
-      ${whereCondition}
+        ${whereCondition}
 
-      ORDER BY r.UTD DESC
-    `;
+        ORDER BY r.UTD DESC
+      `;
 
     console.log("Final SQL:");
     console.log(sql);
@@ -1090,7 +1098,10 @@ exports.getInsuRenewalReminders = async function (req, res, next) {
 
     // अगर emp_dms_code है (Admin) तो सभी data
     // नहीं तो emp_dms_code के subordinates + खुद का data
-    if (emp_dms_code && String(emp_dms_code).trim() !== "") {
+    const isAdmin =
+      String(emp_dms_code || "").trim().toUpperCase() === "EDP";
+
+    if (isAdmin) {
       console.log("✅ ADMIN MODE: Showing all reminders");
       // Admin mode: कोई employee filter नहीं
       employeePlaceholders = "";
@@ -1339,7 +1350,9 @@ exports.getInsuRenewalReminders = async function (req, res, next) {
       return Promise.all(
         rows.map(async (r) => {
           const fu = await sequelize.query(
-            `SELECT TOP 1 FOLLOWUP_STATUS, FOLLOWUP_DATE, FOLLOWUP_TIME, REMARKS
+            `SELECT TOP 1 UTD, FOLLOWUP_STATUS, 
+                    CONVERT(varchar(10), FOLLOWUP_DATE, 120) AS FOLLOWUP_DATE, 
+                    FOLLOWUP_TIME, REMARKS, CREATED_AT
              FROM dbo.FOLLOWUP_DETAILS
              WHERE TRAN_ID = :tranId
              ORDER BY UTD DESC`,
@@ -1348,14 +1361,14 @@ exports.getInsuRenewalReminders = async function (req, res, next) {
               type: sequelize.QueryTypes.SELECT,
             }
           );
-          console.log(fu?.[0]?.FOLLOWUP_STATUS, "followup")
-          console.log(r.TRAN_ID, "tranId")
           return {
             ...r,
-            FOLLOWUP_STATUS: fu?.[0]?.FOLLOWUP_STATUS,
+            FOLLOWUP_UTD: fu?.[0]?.UTD || null,
+            FOLLOWUP_STATUS: fu?.[0]?.FOLLOWUP_STATUS || null,
             FOLLOWUP_DATE: fu?.[0]?.FOLLOWUP_DATE || null,
             FOLLOWUP_TIME: fu?.[0]?.FOLLOWUP_TIME || null,
             REMARKS: fu?.[0]?.REMARKS || null,
+            FOLLOWUP_CREATED_AT: fu?.[0]?.CREATED_AT || null,
           };
         })
       );
@@ -1983,8 +1996,26 @@ exports.SaveInsuranceRenewal = async (req, res) => {
     const regNo = String(b.RegNo || "").trim().toUpperCase();
     if (!regNo) return res.status(400).json({ Status: false, Message: "RegNo required" });
 
-    // ✅ FIX: loc_code resolve (body -> query -> headers) and avoid passing undefined in WHERE
-    const loc_code = b?.loc_code ?? req.body?.loc_code ?? req.query?.loc_code ?? req.headers?.loc_code;
+    // ✅ FIX: loc_code resolve (body -> query -> headers -> user) and parse integer
+    const rawLoc =
+      b?.loc_code ??
+      b?.Loc_Code ??
+      b?.LOC_CODE ??
+      b?.branch ??
+      req.body?.loc_code ??
+      req.body?.Loc_Code ??
+      req.body?.LOC_CODE ??
+      req.body?.branch ??
+      req.query?.loc_code ??
+      req.headers?.loc_code ??
+      req.headers?.branch ??
+      req.user?.branch ??
+      null;
+
+    const loc_code =
+      rawLoc != null && String(rawLoc).trim() !== "" && !isNaN(rawLoc)
+        ? parseInt(rawLoc, 10)
+        : null;
     console.log("loc_code", loc_code);
 
     // =========================================================
@@ -2174,43 +2205,90 @@ exports.SaveInsuranceRenewal = async (req, res) => {
     let createdInsu = null;
     let createdPymt = null;
 
+    const cleanReg = regNo.replace(/[\s\-\/]+/g, "").toUpperCase();
+
     await sequelize.transaction(async (t) => {
-      // 1) master ensure
-      const mstWhere = { VEHICAL_REG_NO: regNo };
-      if (loc_code !== undefined && loc_code !== null && String(loc_code).trim() !== "") {
-        mstWhere.loc_code = loc_code;
-      }
+      // 1) Find existing master by VEHICAL_REG_NO (regardless of loc_code differences)
+      const mstRows = await sequelize.query(
+        `SELECT TOP 1 UTD, VEHICAL_REG_NO, LOC_CODE 
+         FROM dbo.INSU_RENEWAL_MST 
+         WHERE REPLACE(REPLACE(REPLACE(UPPER(LTRIM(RTRIM(ISNULL(VEHICAL_REG_NO, '')))),' ',''),'-',''),'/','') = :cleanReg
+         ORDER BY UTD ASC`,
+        {
+          replacements: { cleanReg },
+          type: sequelize.QueryTypes.SELECT,
+          transaction: t,
+        }
+      );
 
-      let mst = await InsuRenewalMst.findOne({
-        where: mstWhere,
-        transaction: t,
-      });
+      let tranId = mstRows?.[0]?.UTD || null;
 
-      if (!mst) {
-        mst = await InsuRenewalMst.create(
+      if (!tranId) {
+        const newMst = await InsuRenewalMst.create(
           {
             VEHICAL_REG_NO: regNo,
-            loc_code: loc_code, // ✅ FIXED
+            LOC_CODE: loc_code != null ? loc_code : null,
             EXPORT_TYPE: 1,
             CREATED_AT: Sequelize.literal("GETDATE()"),
           },
-          { transaction: t, validate: false }
+          {
+            transaction: t,
+            validate: false,
+            fields: ["VEHICAL_REG_NO", "LOC_CODE", "EXPORT_TYPE", "CREATED_AT"],
+          }
         );
+        console.log("newMst", newMst);
+        tranId = newMst?.UTD ?? newMst?.dataValues?.UTD ?? null;
+
+        // ✅ Direct SQL guarantee to save LOC_CODE in DB
+        if (tranId && loc_code != null) {
+          await sequelize.query(
+            `UPDATE dbo.INSU_RENEWAL_MST
+             SET LOC_CODE = :locCode, EXPORT_TYPE = 1
+             WHERE UTD = :utd`,
+            {
+              replacements: { locCode: loc_code, utd: tranId },
+              transaction: t,
+            }
+          );
+        }
+      } else {
+        const existingLocCode = mstRows[0]?.LOC_CODE ?? mstRows[0]?.loc_code ?? null;
+        if (loc_code != null && (existingLocCode == null || String(existingLocCode).trim() === "")) {
+          await InsuRenewalMst.update(
+            { LOC_CODE: loc_code },
+            { where: { UTD: tranId }, transaction: t }
+          );
+          await sequelize.query(
+            `UPDATE dbo.INSU_RENEWAL_MST
+             SET LOC_CODE = :locCode, EXPORT_TYPE = 1
+             WHERE UTD = :utd`,
+            {
+              replacements: { locCode: loc_code, utd: tranId },
+              transaction: t,
+            }
+          );
+        }
       }
 
-      const tranId = mst?.UTD ?? mst?.dataValues?.UTD ?? null;
       if (!tranId) throw new Error("Failed to get TRAN_ID from master");
 
-      // 2) old active -> 33
-      await InsuRenewal.update(
-        { EXPORT_TYPE: 33 },
-        { where: { VEHICAL_REG_NO: regNo, EXPORT_TYPE: 1 }, transaction: t }
+      // 2) Find existing active INSU_RENEWAL row for this vehicle
+      const existingInsuRows = await sequelize.query(
+        `SELECT TOP 1 UTD 
+         FROM dbo.INSU_RENEWAL 
+         WHERE (TRAN_ID = :tranId OR REPLACE(REPLACE(REPLACE(UPPER(LTRIM(RTRIM(ISNULL(VEHICAL_REG_NO, '')))),' ',''),'-',''),'/','') = :cleanReg)
+           AND ISNULL(EXPORT_TYPE, 1) = 1
+         ORDER BY UTD DESC`,
+        {
+          replacements: { tranId, cleanReg },
+          type: sequelize.QueryTypes.SELECT,
+          transaction: t,
+        }
       );
 
-      // 3) insert new active row -> 1 (INSU_RENEWAL)
-      const insertObj = {
+      const insuObj = {
         VEHICAL_REG_NO: regNo,
-
         CUST_NAME: String(b.OwnerName || "").trim(),
         CUST_MOB_NO: onlyDigits(b.MobileNo),
         MODEL_NAME: String(b.ModelVariant || "").trim() || null,
@@ -2233,42 +2311,64 @@ exports.SaveInsuranceRenewal = async (req, res) => {
         REMARKS: b.Remarks || null,
 
         DOC_PATH: docUrl,
-
         TRAN_ID: tranId,
         EXPORT_TYPE: 1,
         CREATED_AT: Sequelize.literal("GETDATE()"),
       };
 
-      createdInsu = await InsuRenewal.create(insertObj, {
-        transaction: t,
-        validate: false,
-        fields: [
-          "VEHICAL_REG_NO",
-          "CUST_NAME",
-          "CUST_MOB_NO",
-          "MODEL_NAME",
-          "POLICY_NAME",
-          "POLICY_NUMBER",
-          "POLICY_START_DATE",
-          "POLICY_END_DATE",
-          "INSU_TYPE",
-          "PREMIUM_AMOUNT",
-          "PAYMENT_MODE",
-          "PAYMENT_DATE",
-          "PAYMENT_AMOUNT",
-          "UTR",
-          "CHEQUE_NO",
-          "BANK_NAME",
-          "REMARKS",
-          "DOC_PATH",
-          "TRAN_ID",
-          "EXPORT_TYPE",
-          "CREATED_AT",
-        ],
-      });
+      if (existingInsuRows && existingInsuRows.length > 0) {
+        const activeInsuUtd = existingInsuRows[0].UTD;
+        await InsuRenewal.update(insuObj, {
+          where: { UTD: activeInsuUtd },
+          transaction: t,
+        });
+        createdInsu = { UTD: activeInsuUtd };
+      } else {
+        createdInsu = await InsuRenewal.create(insuObj, {
+          transaction: t,
+          validate: false,
+          fields: [
+            "VEHICAL_REG_NO",
+            "CUST_NAME",
+            "CUST_MOB_NO",
+            "MODEL_NAME",
+            "POLICY_NAME",
+            "POLICY_NUMBER",
+            "POLICY_START_DATE",
+            "POLICY_END_DATE",
+            "INSU_TYPE",
+            "PREMIUM_AMOUNT",
+            "PAYMENT_MODE",
+            "PAYMENT_DATE",
+            "PAYMENT_AMOUNT",
+            "UTR",
+            "CHEQUE_NO",
+            "BANK_NAME",
+            "REMARKS",
+            "DOC_PATH",
+            "TRAN_ID",
+            "EXPORT_TYPE",
+            "CREATED_AT",
+          ],
+        });
+      }
 
-      // 4) save in INSU_RENEWAL_PYMT with PYMT_STATUS=1 + PYMT_CODE=empCode
-      const pymtInsertObj = {
+      // 3) Find existing payment record in INSU_RENEWAL_PYMT for this vehicle / TRAN_ID
+      const existingPymtRows = await sequelize.query(
+        `SELECT p.UTD, p.TRAN_ID 
+         FROM dbo.INSU_RENEWAL_PYMT p
+         LEFT JOIN dbo.INSU_RENEWAL_MST m ON m.UTD = p.TRAN_ID
+         WHERE p.TRAN_ID = :tranId
+            OR (m.VEHICAL_REG_NO IS NOT NULL AND REPLACE(REPLACE(REPLACE(UPPER(LTRIM(RTRIM(m.VEHICAL_REG_NO))),' ',''),'-',''),'/','') = :cleanReg)
+         ORDER BY p.UTD ASC`,
+        {
+          replacements: { tranId, cleanReg },
+          type: sequelize.QueryTypes.SELECT,
+          transaction: t,
+        }
+      );
+
+      const pymtDataObj = {
         TRAN_ID: tranId,
         INSU_TYPE: insuType,
         PREMIUM_AMOUNT: b.PremiumAmount || null,
@@ -2277,7 +2377,7 @@ exports.SaveInsuranceRenewal = async (req, res) => {
         PYMT_DATE: pymtDate,
         PYMT_AMOUNT: b.Amount || null,
 
-        PYMT_CODE: empCode, // ✅ FIXED
+        PYMT_CODE: empCode,
 
         PYMT_REMARK: b.Remarks || null,
         PYMT_STATUS: 1,
@@ -2290,26 +2390,53 @@ exports.SaveInsuranceRenewal = async (req, res) => {
         CREATED_AT: Sequelize.literal("GETDATE()"),
       };
 
-      createdPymt = await InsuRenewalPymt.create(pymtInsertObj, {
-        transaction: t,
-        validate: false,
-        fields: [
-          "TRAN_ID",
-          "INSU_TYPE",
-          "PREMIUM_AMOUNT",
-          "PYMT_MODE",
-          "PYMT_DATE",
-          "PYMT_AMOUNT",
-          "PYMT_CODE",
-          "PYMT_REMARK",
-          "PYMT_STATUS",
-          "UTR",
-          "BANK_NAME",
-          "REMARKS",
-          "DOC_PATH",
-          "CREATED_AT",
-        ],
-      });
+      if (existingPymtRows && existingPymtRows.length > 0) {
+        const primaryUtd = existingPymtRows[0].UTD;
+        await InsuRenewalPymt.update(
+          {
+            ...pymtDataObj,
+            ACNT_APPR_STATUS: null,
+            ACNT_APPR_CODE: null,
+            ACNT_APPR_REMARK: null,
+            ACNT_APPR_DATE: null,
+          },
+          {
+            where: { UTD: primaryUtd },
+            transaction: t,
+          }
+        );
+        createdPymt = { UTD: primaryUtd };
+
+        // Clean up duplicate historical payment rows for this vehicle if any
+        if (existingPymtRows.length > 1) {
+          const dupUtds = existingPymtRows.slice(1).map((r) => r.UTD);
+          await InsuRenewalPymt.destroy({
+            where: { UTD: dupUtds },
+            transaction: t,
+          });
+        }
+      } else {
+        createdPymt = await InsuRenewalPymt.create(pymtDataObj, {
+          transaction: t,
+          validate: false,
+          fields: [
+            "TRAN_ID",
+            "INSU_TYPE",
+            "PREMIUM_AMOUNT",
+            "PYMT_MODE",
+            "PYMT_DATE",
+            "PYMT_AMOUNT",
+            "PYMT_CODE",
+            "PYMT_REMARK",
+            "PYMT_STATUS",
+            "UTR",
+            "BANK_NAME",
+            "REMARKS",
+            "DOC_PATH",
+            "CREATED_AT",
+          ],
+        });
+      }
     });
 
     return res.json({
@@ -2370,7 +2497,7 @@ exports.getAllInsuranceRenewals = async (req, res) => {
 
     // ── Pagination ──────────────────────────────────────────
     const page = Math.max(1, parseInt(b.page) || 1);
-    const pageSize = Math.max(1, parseInt(b.pageSize) || 10);
+    const pageSize = Math.max(1, parseInt(b.pageSize) || 10000);
     const offset = (page - 1) * pageSize;
 
     // ── Filters ─────────────────────────────────────────────
@@ -2486,28 +2613,39 @@ exports.getAllInsuranceRenewals = async (req, res) => {
     // ── COUNT ────────────────────────────────────────────────
     const countSQL = `
       SELECT COUNT(*) AS total
-      FROM dbo.INSU_RENEWAL_PYMT P
-      LEFT JOIN dbo.INSU_RENEWAL_MST MST
-        ON MST.UTD = P.TRAN_ID
-      OUTER APPLY (
-        SELECT TOP 1
-          IR2.UTD,
-          IR2.TRAN_ID,
-          IR2.CUST_NAME,
-          IR2.CUST_MOB_NO,
-          IR2.VEHICAL_REG_NO,
-          IR2.MODEL_NAME,
-          IR2.POLICY_NAME,
-          IR2.POLICY_NUMBER,
-          IR2.POLICY_START_DATE,
-          IR2.POLICY_END_DATE,
-          IR2.INSU_TYPE,
-          IR2.PREMIUM_AMOUNT
-        FROM dbo.INSU_RENEWAL IR2
-        WHERE IR2.TRAN_ID = MST.UTD
-        ORDER BY IR2.UTD DESC
-      ) IR
-      ${whereSQL}
+      FROM (
+        SELECT 
+          P.UTD,
+          ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(NULLIF(LTRIM(RTRIM(MST.VEHICAL_REG_NO)), ''), NULLIF(LTRIM(RTRIM(IR.VEHICAL_REG_NO)), ''), CAST(P.TRAN_ID AS VARCHAR))
+            ORDER BY P.UTD DESC
+          ) AS rn
+        FROM dbo.INSU_RENEWAL_PYMT P
+        LEFT JOIN dbo.INSU_RENEWAL_MST MST
+          ON MST.UTD = P.TRAN_ID
+        OUTER APPLY (
+          SELECT TOP 1
+            IR2.UTD,
+            IR2.TRAN_ID,
+            IR2.CUST_NAME,
+            IR2.CUST_MOB_NO,
+            IR2.VEHICAL_REG_NO,
+            IR2.MODEL_NAME,
+            IR2.POLICY_NAME,
+            IR2.POLICY_NUMBER,
+            IR2.POLICY_START_DATE,
+            IR2.POLICY_END_DATE,
+            IR2.INSU_TYPE,
+            IR2.PREMIUM_AMOUNT
+          FROM dbo.INSU_RENEWAL IR2
+          WHERE IR2.TRAN_ID = MST.UTD
+             OR (MST.VEHICAL_REG_NO IS NOT NULL AND REPLACE(UPPER(IR2.VEHICAL_REG_NO), ' ', '') = REPLACE(UPPER(MST.VEHICAL_REG_NO), ' ', ''))
+             OR IR2.TRAN_ID = P.TRAN_ID
+          ORDER BY IR2.UTD DESC
+        ) IR
+        ${whereSQL}
+      ) Sub
+      WHERE Sub.rn = 1
     `;
 
     console.log("sql", countSQL);
@@ -2525,173 +2663,181 @@ exports.getAllInsuranceRenewals = async (req, res) => {
     replacements.pageSize = pageSize;
 
     const dataSQL = `
-      SELECT
-        P.UTD        AS PYMT_UTD,
-        P.TRAN_ID    AS TRAN_ID,
-        P.CREATED_AT AS PYMT_CREATED_AT,
+      ;WITH FilteredPymt AS (
+        SELECT
+          P.UTD        AS PYMT_UTD,
+          P.TRAN_ID    AS TRAN_ID,
+          P.CREATED_AT AS PYMT_CREATED_AT,
 
-        P.PYMT_MODE,
-        COALESCE(PM_P.Misc_Name, PM_P.Misc_Abbr, P.PYMT_MODE, IR.PAYMENT_MODE) AS PAYMENT_MODE_NAME,
-        P.PYMT_DATE,
-        P.PYMT_AMOUNT,
-        P.PYMT_CODE,
-        COALESCE(P.PYMT_REMARK, P.REMARKS, IR.REMARKS) AS PYMT_REMARK,
-        COALESCE(P.PYMT_REMARK, P.REMARKS, IR.REMARKS) AS REMARKS,
-        P.PYMT_STATUS,
+          P.PYMT_MODE,
+          COALESCE(PM_P.Misc_Name, PM_P.Misc_Abbr, P.PYMT_MODE, IR.PAYMENT_MODE) AS PAYMENT_MODE_NAME,
+          P.PYMT_DATE,
+          P.PYMT_AMOUNT,
+          P.PYMT_CODE,
+          COALESCE(P.PYMT_REMARK, P.REMARKS, IR.REMARKS) AS PYMT_REMARK,
+          COALESCE(P.PYMT_REMARK, P.REMARKS, IR.REMARKS) AS REMARKS,
+          P.PYMT_STATUS,
 
-        P.ACNT_APPR_CODE,
-        P.ACNT_APPR_REMARK,
-        P.ACNT_APPR_STATUS,
-        P.ACNT_APPR_DATE,
+          P.ACNT_APPR_CODE,
+          P.ACNT_APPR_REMARK,
+          P.ACNT_APPR_STATUS,
+          P.ACNT_APPR_DATE,
 
-        P.UTR,
-        P.BANK_NAME,
-        P.CHEQUE_NO,
-        P.DOC_PATH,
+          P.UTR,
+          P.BANK_NAME,
+          P.CHEQUE_NO,
+          P.DOC_PATH,
 
-        P.PREMIUM_AMOUNT AS PYMT_PREMIUM_AMOUNT,
+          P.PREMIUM_AMOUNT AS PYMT_PREMIUM_AMOUNT,
 
-        MST.UTD            AS MST_UTD,
-        MST.VEHICAL_REG_NO AS MST_REG_NO,
+          MST.UTD            AS MST_UTD,
+          MST.VEHICAL_REG_NO AS MST_REG_NO,
 
-        IR.UTD            AS INSU_UTD,
-        IR.CUST_NAME,
-        IR.CUST_MOB_NO,
-        IR.VEHICAL_REG_NO,
-        IR.MODEL_NAME,
-        IR.POLICY_NAME,
-        IR.POLICY_NUMBER,
-        IR.POLICY_START_DATE,
-        IR.POLICY_END_DATE,
-        IR.INSU_TYPE,
-        IR.PREMIUM_AMOUNT AS IR_PREMIUM_AMOUNT,
+          IR.UTD            AS INSU_UTD,
+          IR.CUST_NAME,
+          IR.CUST_MOB_NO,
+          IR.VEHICAL_REG_NO,
+          IR.MODEL_NAME,
+          IR.POLICY_NAME,
+          IR.POLICY_NUMBER,
+          IR.POLICY_START_DATE,
+          IR.POLICY_END_DATE,
+          IR.INSU_TYPE,
+          IR.PREMIUM_AMOUNT AS IR_PREMIUM_AMOUNT,
 
-        COALESCE(IR.PREMIUM_AMOUNT, P.PREMIUM_AMOUNT) AS PREMIUM_AMOUNT,
+          COALESCE(IR.PREMIUM_AMOUNT, P.PREMIUM_AMOUNT) AS PREMIUM_AMOUNT,
 
-        -- Insurance Company Name: resolved from MISC_MST or fallback to POLICY_NAME
-        COALESCE(
-          -- 1. From IC_P join (P.INSU_TYPE via name/abbr) - skip if 'OTHER'
-          NULLIF(NULLIF(IC_P.Misc_Name, ''), 'OTHER'),
-          NULLIF(NULLIF(IC_IR.Misc_Name, ''), 'OTHER'),
-          -- 2. If INSU_TYPE is numeric (like '9'), look up by UTD only
-          CASE WHEN ISNUMERIC(ISNULL(NULLIF(LTRIM(RTRIM(P.INSU_TYPE)),''), 'x')) = 1
-               THEN NULLIF((SELECT TOP 1 M.Misc_Name FROM dbo.MISC_MST M
-                            WHERE M.Misc_Type = 9 AND ISNULL(M.Export_Type,1)<>33
-                              AND CAST(M.UTD AS NVARCHAR(20)) = LTRIM(RTRIM(P.INSU_TYPE))
-                            ORDER BY M.UTD), 'OTHER')
-          END,
-          CASE WHEN ISNUMERIC(ISNULL(NULLIF(LTRIM(RTRIM(IR.INSU_TYPE)),''), 'x')) = 1
-               THEN NULLIF((SELECT TOP 1 M.Misc_Name FROM dbo.MISC_MST M
-                            WHERE M.Misc_Type = 9 AND ISNULL(M.Export_Type,1)<>33
-                              AND CAST(M.UTD AS NVARCHAR(20)) = LTRIM(RTRIM(IR.INSU_TYPE))
-                            ORDER BY M.UTD), 'OTHER')
-          END,
-          -- 3. If INSU_TYPE is non-numeric non-OTHER text, use it directly
-          CASE WHEN UPPER(LTRIM(RTRIM(P.INSU_TYPE))) NOT IN ('OTHER','') AND ISNUMERIC(ISNULL(NULLIF(LTRIM(RTRIM(P.INSU_TYPE)),''),'x')) = 0
-               THEN LTRIM(RTRIM(P.INSU_TYPE))
-          END,
-          CASE WHEN UPPER(LTRIM(RTRIM(IR.INSU_TYPE))) NOT IN ('OTHER','') AND ISNUMERIC(ISNULL(NULLIF(LTRIM(RTRIM(IR.INSU_TYPE)),''),'x')) = 0
-               THEN LTRIM(RTRIM(IR.INSU_TYPE))
-          END,
-          -- 4. Last fallback: policy name
-          NULLIF(IR.POLICY_NAME, ''),
-          NULL
-        ) AS INSU_COMPANY_NAME,
+          -- Insurance Company Name: resolved from MISC_MST or fallback to POLICY_NAME
+          COALESCE(
+            NULLIF(NULLIF(IC_P.Misc_Name, ''), 'OTHER'),
+            NULLIF(NULLIF(IC_IR.Misc_Name, ''), 'OTHER'),
+            CASE WHEN ISNUMERIC(ISNULL(NULLIF(LTRIM(RTRIM(P.INSU_TYPE)),''), 'x')) = 1
+                 THEN NULLIF((SELECT TOP 1 M.Misc_Name FROM dbo.MISC_MST M
+                              WHERE M.Misc_Type = 9 AND ISNULL(M.Export_Type,1)<>33
+                                AND CAST(M.UTD AS NVARCHAR(20)) = LTRIM(RTRIM(P.INSU_TYPE))
+                              ORDER BY M.UTD), 'OTHER')
+            END,
+            CASE WHEN ISNUMERIC(ISNULL(NULLIF(LTRIM(RTRIM(IR.INSU_TYPE)),''), 'x')) = 1
+                 THEN NULLIF((SELECT TOP 1 M.Misc_Name FROM dbo.MISC_MST M
+                              WHERE M.Misc_Type = 9 AND ISNULL(M.Export_Type,1)<>33
+                                AND CAST(M.UTD AS NVARCHAR(20)) = LTRIM(RTRIM(IR.INSU_TYPE))
+                              ORDER BY M.UTD), 'OTHER')
+            END,
+            CASE WHEN UPPER(LTRIM(RTRIM(P.INSU_TYPE))) NOT IN ('OTHER','') AND ISNUMERIC(ISNULL(NULLIF(LTRIM(RTRIM(P.INSU_TYPE)),''),'x')) = 0
+                 THEN LTRIM(RTRIM(P.INSU_TYPE))
+            END,
+            CASE WHEN UPPER(LTRIM(RTRIM(IR.INSU_TYPE))) NOT IN ('OTHER','') AND ISNUMERIC(ISNULL(NULLIF(LTRIM(RTRIM(IR.INSU_TYPE)),''),'x')) = 0
+                 THEN LTRIM(RTRIM(IR.INSU_TYPE))
+            END,
+            NULLIF(IR.POLICY_NAME, ''),
+            NULL
+          ) AS INSU_COMPANY_NAME,
 
-        COALESCE(
-          NULLIF(NULLIF(IC_P.Misc_Name, ''), 'OTHER'),
-          CASE WHEN ISNUMERIC(ISNULL(NULLIF(LTRIM(RTRIM(P.INSU_TYPE)),''), 'x')) = 1
-               THEN NULLIF((SELECT TOP 1 M.Misc_Name FROM dbo.MISC_MST M
-                            WHERE M.Misc_Type = 9 AND ISNULL(M.Export_Type,1)<>33
-                              AND CAST(M.UTD AS NVARCHAR(20)) = LTRIM(RTRIM(P.INSU_TYPE))
-                            ORDER BY M.UTD), 'OTHER')
-          END,
-          CASE WHEN UPPER(LTRIM(RTRIM(P.INSU_TYPE))) NOT IN ('OTHER','') AND ISNUMERIC(ISNULL(NULLIF(LTRIM(RTRIM(P.INSU_TYPE)),''),'x')) = 0
-               THEN LTRIM(RTRIM(P.INSU_TYPE))
-          END,
-          NULL
-        ) AS PYMT_INSU_TYPE_NAME,
+          COALESCE(
+            NULLIF(NULLIF(IC_P.Misc_Name, ''), 'OTHER'),
+            CASE WHEN ISNUMERIC(ISNULL(NULLIF(LTRIM(RTRIM(P.INSU_TYPE)),''), 'x')) = 1
+                 THEN NULLIF((SELECT TOP 1 M.Misc_Name FROM dbo.MISC_MST M
+                              WHERE M.Misc_Type = 9 AND ISNULL(M.Export_Type,1)<>33
+                                AND CAST(M.UTD AS NVARCHAR(20)) = LTRIM(RTRIM(P.INSU_TYPE))
+                              ORDER BY M.UTD), 'OTHER')
+            END,
+            CASE WHEN UPPER(LTRIM(RTRIM(P.INSU_TYPE))) NOT IN ('OTHER','') AND ISNUMERIC(ISNULL(NULLIF(LTRIM(RTRIM(P.INSU_TYPE)),''),'x')) = 0
+                 THEN LTRIM(RTRIM(P.INSU_TYPE))
+            END,
+            NULL
+          ) AS PYMT_INSU_TYPE_NAME,
 
-        DATEDIFF(day, CAST(GETDATE() AS date), IR.POLICY_END_DATE) AS DAYS_TO_EXPIRY,
+          DATEDIFF(day, CAST(GETDATE() AS date), IR.POLICY_END_DATE) AS DAYS_TO_EXPIRY,
 
-        CASE
-          WHEN IR.POLICY_END_DATE < CAST(GETDATE() AS date) THEN 'EXPIRED'
-          WHEN IR.POLICY_END_DATE = CAST(GETDATE() AS date) THEN 'EXPIRING_TODAY'
-          WHEN DATEDIFF(day, CAST(GETDATE() AS date), IR.POLICY_END_DATE) <= 30 THEN 'EXPIRING_SOON'
-          ELSE 'ACTIVE'
-        END AS EXPIRY_STATUS
+          CASE
+            WHEN IR.POLICY_END_DATE < CAST(GETDATE() AS date) THEN 'EXPIRED'
+            WHEN IR.POLICY_END_DATE = CAST(GETDATE() AS date) THEN 'EXPIRING_TODAY'
+            WHEN DATEDIFF(day, CAST(GETDATE() AS date), IR.POLICY_END_DATE) <= 30 THEN 'EXPIRING_SOON'
+            ELSE 'ACTIVE'
+          END AS EXPIRY_STATUS,
 
-      FROM dbo.INSU_RENEWAL_PYMT P
-      LEFT JOIN dbo.INSU_RENEWAL_MST MST
-        ON MST.UTD = P.TRAN_ID
+          ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(NULLIF(LTRIM(RTRIM(MST.VEHICAL_REG_NO)), ''), NULLIF(LTRIM(RTRIM(IR.VEHICAL_REG_NO)), ''), CAST(P.TRAN_ID AS VARCHAR))
+            ORDER BY P.UTD DESC
+          ) AS rn
 
-      OUTER APPLY (
-        SELECT TOP 1
-          IR2.UTD,
-          IR2.TRAN_ID,
-          IR2.CUST_NAME,
-          IR2.CUST_MOB_NO,
-          IR2.VEHICAL_REG_NO,
-          IR2.MODEL_NAME,
-          IR2.POLICY_NAME,
-          IR2.POLICY_NUMBER,
-          IR2.POLICY_START_DATE,
-          IR2.POLICY_END_DATE,
-          IR2.INSU_TYPE,
-          IR2.PREMIUM_AMOUNT,
-          IR2.REMARKS,
-          IR2.PAYMENT_MODE
-        FROM dbo.INSU_RENEWAL IR2
-        WHERE IR2.TRAN_ID = MST.UTD
-        ORDER BY IR2.UTD DESC
-      ) IR
+        FROM dbo.INSU_RENEWAL_PYMT P
+        LEFT JOIN dbo.INSU_RENEWAL_MST MST
+          ON MST.UTD = P.TRAN_ID
 
-      -- Insurance Company: match IR.INSU_TYPE by UTD, Misc_Code, Misc_Name, or Misc_Abbr
-      LEFT JOIN dbo.MISC_MST IC_IR
-        ON IC_IR.Misc_Type = 9
-       AND ISNULL(IC_IR.Export_Type, 1) <> 33
-       AND (
-            CAST(IC_IR.UTD AS VARCHAR(50)) = CAST(IR.INSU_TYPE AS VARCHAR(50))
-         OR CAST(IC_IR.Misc_Code AS VARCHAR(50)) = CAST(IR.INSU_TYPE AS VARCHAR(50))
-         OR UPPER(LTRIM(RTRIM(IC_IR.Misc_Name))) = UPPER(LTRIM(RTRIM(CAST(IR.INSU_TYPE AS nvarchar(200)))))
-         OR UPPER(LTRIM(RTRIM(IC_IR.Misc_Abbr))) = UPPER(LTRIM(RTRIM(CAST(IR.INSU_TYPE AS nvarchar(200)))))
-       )
+        OUTER APPLY (
+          SELECT TOP 1
+            IR2.UTD,
+            IR2.TRAN_ID,
+            IR2.CUST_NAME,
+            IR2.CUST_MOB_NO,
+            IR2.VEHICAL_REG_NO,
+            IR2.MODEL_NAME,
+            IR2.POLICY_NAME,
+            IR2.POLICY_NUMBER,
+            IR2.POLICY_START_DATE,
+            IR2.POLICY_END_DATE,
+            IR2.INSU_TYPE,
+            IR2.PREMIUM_AMOUNT,
+            IR2.REMARKS,
+            IR2.PAYMENT_MODE
+          FROM dbo.INSU_RENEWAL IR2
+          WHERE IR2.TRAN_ID = MST.UTD
+             OR (MST.VEHICAL_REG_NO IS NOT NULL AND REPLACE(UPPER(IR2.VEHICAL_REG_NO), ' ', '') = REPLACE(UPPER(MST.VEHICAL_REG_NO), ' ', ''))
+             OR IR2.TRAN_ID = P.TRAN_ID
+          ORDER BY IR2.UTD DESC
+        ) IR
 
-      -- Fallback: match P.INSU_TYPE
-      LEFT JOIN dbo.MISC_MST IC_P
-        ON IC_P.Misc_Type = 9
-       AND ISNULL(IC_P.Export_Type, 1) <> 33
-       AND (
-            CAST(IC_P.UTD AS VARCHAR(50)) = CAST(P.INSU_TYPE AS VARCHAR(50))
-         OR CAST(IC_P.Misc_Code AS VARCHAR(50)) = CAST(P.INSU_TYPE AS VARCHAR(50))
-         OR UPPER(LTRIM(RTRIM(IC_P.Misc_Name))) = UPPER(LTRIM(RTRIM(CAST(P.INSU_TYPE AS nvarchar(200)))))
-         OR UPPER(LTRIM(RTRIM(IC_P.Misc_Abbr))) = UPPER(LTRIM(RTRIM(CAST(P.INSU_TYPE AS nvarchar(200)))))
-       )
+        -- Insurance Company: match IR.INSU_TYPE by UTD, Misc_Code, Misc_Name, or Misc_Abbr
+        LEFT JOIN dbo.MISC_MST IC_IR
+          ON IC_IR.Misc_Type = 9
+         AND ISNULL(IC_IR.Export_Type, 1) <> 33
+         AND (
+              CAST(IC_IR.UTD AS VARCHAR(50)) = CAST(IR.INSU_TYPE AS VARCHAR(50))
+           OR CAST(IC_IR.Misc_Code AS VARCHAR(50)) = CAST(IR.INSU_TYPE AS VARCHAR(50))
+           OR UPPER(LTRIM(RTRIM(IC_IR.Misc_Name))) = UPPER(LTRIM(RTRIM(CAST(IR.INSU_TYPE AS nvarchar(200)))))
+           OR UPPER(LTRIM(RTRIM(IC_IR.Misc_Abbr))) = UPPER(LTRIM(RTRIM(CAST(IR.INSU_TYPE AS nvarchar(200)))))
+         )
 
-      -- Payment Mode: match P.PYMT_MODE by UTD, Misc_Code, Misc_Name, or Misc_Abbr
-      LEFT JOIN dbo.MISC_MST PM_P
-        ON PM_P.Misc_Type = 18
-       AND ISNULL(PM_P.Export_Type, 1) <> 33
-       AND (
-            CAST(PM_P.UTD AS VARCHAR(50)) = CAST(P.PYMT_MODE AS VARCHAR(50))
-         OR CAST(PM_P.Misc_Code AS VARCHAR(50)) = CAST(P.PYMT_MODE AS VARCHAR(50))
-         OR UPPER(LTRIM(RTRIM(PM_P.Misc_Name))) = UPPER(LTRIM(RTRIM(CAST(P.PYMT_MODE AS nvarchar(200)))))
-         OR UPPER(LTRIM(RTRIM(PM_P.Misc_Abbr))) = UPPER(LTRIM(RTRIM(CAST(P.PYMT_MODE AS nvarchar(200)))))
-       )
+        -- Fallback: match P.INSU_TYPE
+        LEFT JOIN dbo.MISC_MST IC_P
+          ON IC_P.Misc_Type = 9
+         AND ISNULL(IC_P.Export_Type, 1) <> 33
+         AND (
+              CAST(IC_P.UTD AS VARCHAR(50)) = CAST(P.INSU_TYPE AS VARCHAR(50))
+           OR CAST(IC_P.Misc_Code AS VARCHAR(50)) = CAST(P.INSU_TYPE AS VARCHAR(50))
+           OR UPPER(LTRIM(RTRIM(IC_P.Misc_Name))) = UPPER(LTRIM(RTRIM(CAST(P.INSU_TYPE AS nvarchar(200)))))
+           OR UPPER(LTRIM(RTRIM(IC_P.Misc_Abbr))) = UPPER(LTRIM(RTRIM(CAST(P.INSU_TYPE AS nvarchar(200)))))
+         )
 
-      -- Fallback Payment Mode: from IR.PAYMENT_MODE
-      LEFT JOIN dbo.MISC_MST PM_IR
-        ON PM_IR.Misc_Type = 18
-       AND ISNULL(PM_IR.Export_Type, 1) <> 33
-       AND (
-            CAST(PM_IR.UTD AS VARCHAR(50)) = CAST(IR.PAYMENT_MODE AS VARCHAR(50))
-         OR CAST(PM_IR.Misc_Code AS VARCHAR(50)) = CAST(IR.PAYMENT_MODE AS VARCHAR(50))
-         OR UPPER(LTRIM(RTRIM(PM_IR.Misc_Name))) = UPPER(LTRIM(RTRIM(CAST(IR.PAYMENT_MODE AS nvarchar(200)))))
-         OR UPPER(LTRIM(RTRIM(PM_IR.Misc_Abbr))) = UPPER(LTRIM(RTRIM(CAST(IR.PAYMENT_MODE AS nvarchar(200)))))
-       )
+        -- Payment Mode: match P.PYMT_MODE by UTD, Misc_Code, Misc_Name, or Misc_Abbr
+        LEFT JOIN dbo.MISC_MST PM_P
+          ON PM_P.Misc_Type = 18
+         AND ISNULL(PM_P.Export_Type, 1) <> 33
+         AND (
+              CAST(PM_P.UTD AS VARCHAR(50)) = CAST(P.PYMT_MODE AS VARCHAR(50))
+           OR CAST(PM_P.Misc_Code AS VARCHAR(50)) = CAST(P.PYMT_MODE AS VARCHAR(50))
+           OR UPPER(LTRIM(RTRIM(PM_P.Misc_Name))) = UPPER(LTRIM(RTRIM(CAST(P.PYMT_MODE AS nvarchar(200)))))
+           OR UPPER(LTRIM(RTRIM(PM_P.Misc_Abbr))) = UPPER(LTRIM(RTRIM(CAST(P.PYMT_MODE AS nvarchar(200)))))
+         )
 
-      ${whereSQL}
-      ORDER BY P.UTD DESC
+        -- Fallback Payment Mode: from IR.PAYMENT_MODE
+        LEFT JOIN dbo.MISC_MST PM_IR
+          ON PM_IR.Misc_Type = 18
+         AND ISNULL(PM_IR.Export_Type, 1) <> 33
+         AND (
+              CAST(PM_IR.UTD AS VARCHAR(50)) = CAST(IR.PAYMENT_MODE AS VARCHAR(50))
+           OR CAST(PM_IR.Misc_Code AS VARCHAR(50)) = CAST(IR.PAYMENT_MODE AS VARCHAR(50))
+           OR UPPER(LTRIM(RTRIM(PM_IR.Misc_Name))) = UPPER(LTRIM(RTRIM(CAST(IR.PAYMENT_MODE AS nvarchar(200)))))
+           OR UPPER(LTRIM(RTRIM(PM_IR.Misc_Abbr))) = UPPER(LTRIM(RTRIM(CAST(IR.PAYMENT_MODE AS nvarchar(200)))))
+         )
+
+        ${whereSQL}
+      )
+      SELECT *
+      FROM FilteredPymt
+      WHERE rn = 1
+      ORDER BY PYMT_UTD DESC
       OFFSET :offset ROWS
       FETCH NEXT :pageSize ROWS ONLY
     `;
@@ -3348,7 +3494,12 @@ exports.updateInsuranceRenewalApproval = async (req, res) => {
     }
 
     await InsuRenewalPymt.update(updateObj, {
-      where: { UTD },
+      where: {
+        [Op.or]: [
+          { UTD },
+          ...(exists.TRAN_ID ? [{ TRAN_ID: exists.TRAN_ID }] : []),
+        ],
+      },
       transaction: t,
     });
 
@@ -3438,7 +3589,9 @@ exports.getAllApprovedInsuranceRenewals = async (req, res) => {
     let employeeReplacements = {};
 
     // अगर emp_dms_code है (Admin) तो सभी data
-    if (emp_dms_code && String(emp_dms_code).trim() !== "") {
+    const isAdmin =
+      String(emp_dms_code || "").trim().toUpperCase() === "EDP";
+    if (isAdmin) {
       console.log("✅ ADMIN MODE: Showing all approved payments");
       // Admin mode: कोई employee filter नहीं
       employeePlaceholders = "";
@@ -3916,8 +4069,6 @@ exports.getAllApprovedInsuranceRenewals = async (req, res) => {
     await sequelize.close();
   }
 };
-
-
 
 // {BONVOICE}
 // exports.makeInsuranceRenewalCall = async function (req, res) {
@@ -4828,7 +4979,6 @@ function formatDate(dateStr) {
   return `${d.padStart(2, "0")}/${m.padStart(2, "0")}/${y}`;
 }
 
-
 const pickVal = (...vals) =>
   vals.find((v) => v !== undefined && v !== null && v !== "");
 
@@ -4861,11 +5011,187 @@ const toSqlDateTimeOrNullHelper = (v) => {
   );
 };
 
+const webhookSaveLocks = new Map();
+
+const extractCleanSummary = (val) => {
+  if (!val) return null;
+
+  // If val is an array (Callmatic insights array)
+  if (Array.isArray(val)) {
+    // 1. Look for actionType: SUMMARIZE
+    const sumItem = val.find(
+      (x) =>
+        x &&
+        (String(x.actionType || "").toUpperCase() === "SUMMARIZE" ||
+          String(x.type || "").toUpperCase() === "SUMMARIZE" ||
+          x.output?.summary ||
+          x.summary)
+    );
+    if (sumItem) {
+      const res =
+        sumItem.output?.summary ||
+        sumItem.summary ||
+        sumItem.text ||
+        sumItem.output?.text ||
+        sumItem.output?.overview ||
+        sumItem.overview;
+      if (res && typeof res === "string" && res.trim().length > 0)
+        return res.trim();
+    }
+    // 2. Any item that has output.summary or summary
+    for (const item of val) {
+      if (item && typeof item === "object") {
+        const s =
+          item.output?.summary ||
+          item.summary ||
+          item.overview ||
+          item.call_summary ||
+          item.output?.text;
+        if (s && typeof s === "string" && s.trim().length > 0) return s.trim();
+      }
+    }
+    return null;
+  }
+
+  // If val is an object
+  if (typeof val === "object") {
+    if (String(val.actionType || "").toUpperCase() === "SUMMARIZE") {
+      const s =
+        val.output?.summary ||
+        val.summary ||
+        val.output?.text ||
+        val.text ||
+        val.overview;
+      if (s && typeof s === "string" && s.trim().length > 0) return s.trim();
+    }
+    const inner =
+      val.summary ||
+      val.output?.summary ||
+      val.call_summary ||
+      val.overview ||
+      val.text ||
+      val.description;
+    if (typeof inner === "string" && inner.trim().length > 0)
+      return inner.trim();
+
+    if (val.insights) {
+      const fromIns = extractCleanSummary(val.insights);
+      if (fromIns) return fromIns;
+    }
+    return null;
+  }
+
+  // If val is a string
+  if (typeof val === "string") {
+    const s = val.trim();
+    if (!s) return null;
+
+    // Check if it's JSON array or object
+    if (s.startsWith("[") || s.startsWith("{")) {
+      try {
+        const parsed = JSON.parse(s);
+        const res = extractCleanSummary(parsed);
+        if (res) return res;
+      } catch (_) { }
+    }
+
+    // Try regex search for SUMMARIZE output summary
+    const sumMatch =
+      s.match(
+        /"actionType"\s*:\s*"SUMMARIZE"[^}]*"output"\s*:\s*\{[^}]*"summary"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/i
+      ) ||
+      s.match(
+        /"actionType"\s*:\s*"SUMMARIZE"[^}]*"summary"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/i
+      ) ||
+      s.match(
+        /"summary"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/i
+      );
+
+    if (sumMatch && sumMatch[1]) {
+      try {
+        return JSON.parse(`"${sumMatch[1]}"`);
+      } catch {
+        return sumMatch[1];
+      }
+    }
+
+    // If it is a raw JSON string like {"actionType"..., don't return raw JSON string
+    if (s.startsWith('{"actionType"') || s.startsWith('[{"actionType"')) {
+      return null;
+    }
+
+    return s;
+  }
+
+  return String(val);
+};
+
+const extractSummaryHelper = (data = {}) => {
+  if (!data) return null;
+
+  // 1. Direct summary fields
+  const direct =
+    data.summary ||
+    data.SUMMARY ||
+    data.call_summary ||
+    data.transcript_summary ||
+    data.ai_summary ||
+    data.call?.summary ||
+    data.call?.call_summary ||
+    data.call?.ai_summary ||
+    data.call?.transcript_summary ||
+    data.analysis?.summary ||
+    data.analysis?.call_summary ||
+    data.analysis?.overview ||
+    data.analysis?.structured_data?.summary ||
+    data.analysis?.transcript_summary ||
+    data.call_analysis?.summary ||
+    data.call_analysis?.call_summary ||
+    data.call_analysis?.overview ||
+    data.overview ||
+    data.notes ||
+    data.data?.summary ||
+    data.data?.call_summary ||
+    data.data?.analysis?.summary ||
+    data.data?.analysis?.call_summary ||
+    data.data?.analysis?.overview ||
+    data.data?.call_analysis?.summary ||
+    data.data?.call_analysis?.call_summary ||
+    data.data?.ai_summary;
+
+  const fromDirect = extractCleanSummary(direct);
+  if (fromDirect) return fromDirect;
+
+  // 2. Check insights field (Callmatic specific)
+  if (data.insights !== undefined && data.insights !== null) {
+    const fromInsights = extractCleanSummary(data.insights);
+    if (fromInsights) return fromInsights;
+  }
+
+  // 3. Check nested insights
+  if (data.data?.insights || data.call?.insights) {
+    const fromNested = extractCleanSummary(data.data?.insights || data.call?.insights);
+    if (fromNested) return fromNested;
+  }
+
+  return null;
+};
+
 const saveCallWebhookDetails = async (sequelize, callId, data = {}) => {
   if (!sequelize || !callId) return null;
+  const cid = String(callId).trim();
+  if (!cid) return null;
+
+  // In-memory Mutex queue per call_id so parallel writes for same call wait in sequence
+  let previousLock = webhookSaveLocks.get(cid) || Promise.resolve();
+  let currentLockResolver = () => { };
+  const currentLock = new Promise((resolve) => {
+    currentLockResolver = resolve;
+  });
+  webhookSaveLocks.set(cid, currentLock);
+
   try {
-    const cid = String(callId).trim();
-    if (!cid) return null;
+    await previousLock;
 
     const campaign_id = pickVal(data.campaignId, data.campaign_id, data.campaign) || null;
     const direction = pickVal(data.direction) || "outbound";
@@ -4877,7 +5203,38 @@ const saveCallWebhookDetails = async (sequelize, callId, data = {}) => {
       data.lead?.phone_number,
       data.to
     ) || null;
-    const status = pickVal(data.status, data.callStatus, data.call?.status) || null;
+
+    let statusRaw = pickVal(
+      data.status,
+      data.callStatus,
+      data.call_status,
+      data.call?.status,
+      data.call?.callStatus,
+      data.data?.status,         // 👈 Callmatic nested status
+      data.data?.callStatus,
+      data.state
+    );
+    let status = statusRaw ? String(statusRaw).toLowerCase().trim() : null;
+    // 2. Agar status nahi mila lekin event 'call.completed' ya 'call.ended' aaya hai
+    if (!status && (data.event || data.data?.event)) {
+      const ev = String(data.event || data.data?.event).toLowerCase();
+      if (ev.includes("complete") || ev.includes("end") || ev.includes("finish")) {
+        status = "completed";
+      } else if (ev.includes("fail") || ev.includes("error")) {
+        status = "failed";
+      }
+    }
+    // 3. 'ended' ya 'finished' ko standard 'completed' me convert karo
+    if (status && ["ended", "finished", "success", "call_ended", "call.completed", "call.ended"].includes(status)) {
+      status = "completed";
+    }
+    // 4. 🔥 FAILSAFE: Agar transcript ya recording_url aa gayi hai, to call 100% complete ho chuki hai
+    if (
+      (!status || status === "initiated" || status === "ringing" || status === "pending") &&
+      (data.transcript || data.data?.transcript || data.recording_url || data.data?.recording_url || data.recording)
+    ) {
+      status = "completed";
+    }
 
     const triggered_at = toSqlDateTimeOrNullHelper(
       pickVal(data.triggeredAt, data.triggered_at, data.created_at, data.createdAt)
@@ -4892,34 +5249,8 @@ const saveCallWebhookDetails = async (sequelize, callId, data = {}) => {
     const duration = pickVal(data.duration, data.duration_seconds, data.call?.duration_seconds, data.call?.duration) ?? null;
     const ring_time = pickVal(data.ringTime, data.ring_time) ?? null;
 
-    const summary =
-      pickVal(
-        data.summary,
-        data.SUMMARY,
-        data.call_summary,
-        data.transcript_summary,
-        data.call?.summary,
-        data.call?.call_summary,
-        data.call?.transcript_summary,
-        data.analysis?.summary,
-        data.analysis?.call_summary,
-        data.analysis?.overview,
-        data.analysis?.structured_data?.summary,
-        data.analysis?.transcript_summary,
-        data.call_analysis?.summary,
-        data.call_analysis?.call_summary,
-        data.call_analysis?.overview,
-        data.insights?.summary,
-        data.overview,
-        data.notes,
-        data.data?.summary,
-        data.data?.call_summary,
-        data.data?.analysis?.summary,
-        data.data?.analysis?.call_summary,
-        data.data?.analysis?.overview,
-        data.data?.call_analysis?.summary,
-        data.data?.call_analysis?.call_summary
-      ) || null;
+    const summary = extractSummaryHelper(data);
+    console.log(`[SAVE CALL WEBHOOK DETAILS] CallID: ${cid} | Extracted Summary:`, summary);
 
     const transcriptRaw = pickVal(data.transcript, data.call?.transcript, data.data?.transcript) ?? null;
     const transcript = toJsonStringHelper(transcriptRaw);
@@ -4939,7 +5270,7 @@ const saveCallWebhookDetails = async (sequelize, callId, data = {}) => {
     ) ?? null;
 
     const upsertSql = `
-      IF EXISTS (SELECT 1 FROM dbo.call_webhook_dtl WHERE call_id = :call_id)
+      IF EXISTS (SELECT 1 FROM dbo.call_webhook_dtl WITH (UPDLOCK, HOLDLOCK) WHERE LTRIM(RTRIM(call_id)) = :call_id)
       BEGIN
         UPDATE dbo.call_webhook_dtl
         SET
@@ -4957,7 +5288,7 @@ const saveCallWebhookDetails = async (sequelize, callId, data = {}) => {
           category      = COALESCE(:category, category),
           ring_time     = COALESCE(:ring_time, ring_time),
           recording_url = COALESCE(:recording_url, recording_url)
-        WHERE call_id = :call_id
+        WHERE LTRIM(RTRIM(call_id)) = :call_id
       END
       ELSE
       BEGIN
@@ -4997,6 +5328,11 @@ const saveCallWebhookDetails = async (sequelize, callId, data = {}) => {
     });
   } catch (err) {
     console.error("[CALLMATICS] saveCallWebhookDetails error for callId:", callId, err?.message);
+  } finally {
+    currentLockResolver();
+    if (webhookSaveLocks.get(cid) === currentLock) {
+      webhookSaveLocks.delete(cid);
+    }
   }
 };
 exports.saveCallWebhookDetails = saveCallWebhookDetails;
@@ -5336,7 +5672,7 @@ exports.makeInsuranceRenewalCall = async function (req, res) {
           while (attempts < maxAttempts) {
             try {
               // API se call status check kro
-              const statusResult = await getCallStatus(cId);
+              const statusResult = await getCallStatus1(cId);
 
               console.log(`[RENEWAL] Call Status Check (Attempt ${attempts + 1}/${maxAttempts}):`, {
                 callId: cId,
@@ -5357,7 +5693,32 @@ exports.makeInsuranceRenewalCall = async function (req, res) {
 
               // ✅ Call complete/ended/finished ho gaya to return kro
               if (['COMPLETED', 'ENDED', 'FINISHED', 'FAILED', 'BUSY', 'NO_ANSWER', 'CANCELED'].includes(st)) {
-                console.log("[RENEWAL] ✅ Call Status:", statusResult?.status, "- Proceeding to WhatsApp");
+                console.log("[RENEWAL] ✅ Call Status:", statusResult?.status, "- Checking summary & Proceeding");
+
+                // Agar call complete hui par summary nahi aayi, 1-2 brief retries karo taaki Callmatic summary process kar sake
+                if (['COMPLETED', 'ENDED', 'FINISHED'].includes(st) && !statusResult?.summary) {
+                  for (let sAttempt = 1; sAttempt <= 3; sAttempt++) {
+                    await new Promise(resolve => setTimeout(resolve, 3000));
+                    try {
+                      const retryRes = await getCallStatus1(cId);
+                      if (retryRes && bgSeq) {
+                        await saveCallWebhookDetails(bgSeq, cId, {
+                          ...retryRes,
+                          phoneNumber: calledPhone,
+                          calleeName: variables.callee_name || null,
+                          campaignId: finalCampaignId,
+                        });
+                      }
+                      if (retryRes?.summary || retryRes?.analysis?.summary || retryRes?.call_analysis?.summary) {
+                        console.log(`[RENEWAL] ✅ Summary received on retry attempt ${sAttempt}`);
+                        break;
+                      }
+                    } catch (e) {
+                      // ignore retry error
+                    }
+                  }
+                }
+
                 return {
                   success: true,
                   status: statusResult?.status,
@@ -5495,381 +5856,407 @@ exports.makeInsuranceRenewalCall = async function (req, res) {
 };
 
 exports.callmaticWebhook = async function (req, res) {
-    let sequelize;
+  let sequelize;
 
-    try {
-      // ---- helpers ----
-      const pick = (...vals) =>
-        vals.find((v) => v !== undefined && v !== null && v !== "");
+  try {
+    // ---- helpers ----
+    const pick = (...vals) =>
+      vals.find((v) => v !== undefined && v !== null && v !== "");
 
-      const extractCallId = (b = {}) =>
-        pick(
-          b.callId,
-          b.call_id,
-          b.data?.callId,
-          b.data?.call_id,
-          b.payload?.callId,
-          b.payload?.call_id,
-        ) || null;
+    const extractCallId = (b = {}) =>
+      pick(
+        b.callId,
+        b.call_id,
+        b.data?.callId,
+        b.data?.call_id,
+        b.payload?.callId,
+        b.payload?.call_id,
+      ) || null;
 
-      const cleanVehicleNo = (v) =>
-        String(v || "")
-          .toUpperCase()
-          .replace(/\s+/g, "")
-          .replace(/[-/]/g, "")
-          .trim();
+    const cleanVehicleNo = (v) =>
+      String(v || "")
+        .toUpperCase()
+        .replace(/\s+/g, "")
+        .replace(/[-/]/g, "")
+        .trim();
 
-      // const toJsonString = (v) => {
-      //   if (v === undefined || v === null) return null;
-      //   if (typeof v === "string") return v;
-      //   try {
-      //     return JSON.stringify(v);
-      //   } catch {
-      //     return String(v);
-      //   }
-      // };
+    // const toJsonString = (v) => {
+    //   if (v === undefined || v === null) return null;
+    //   if (typeof v === "string") return v;
+    //   try {
+    //     return JSON.stringify(v);
+    //   } catch {
+    //     return String(v);
+    //   }
+    // };
 
-      // ✅ SQL Server safe datetime string: YYYY-MM-DD HH:mm:ss.SSS
-      // const toSqlDateTimeOrNull = (v) => {
-      //   if (!v) return null;
-      //   const d = typeof v === "number" ? new Date(v * 1000) : new Date(v);
-      //   if (isNaN(d.getTime())) return null;
+    // ✅ SQL Server safe datetime string: YYYY-MM-DD HH:mm:ss.SSS
+    // const toSqlDateTimeOrNull = (v) => {
+    //   if (!v) return null;
+    //   const d = typeof v === "number" ? new Date(v * 1000) : new Date(v);
+    //   if (isNaN(d.getTime())) return null;
 
-      //   const pad2 = (n) => String(n).padStart(2, "0");
-      //   const pad3 = (n) => String(n).padStart(3, "0");
+    //   const pad2 = (n) => String(n).padStart(2, "0");
+    //   const pad3 = (n) => String(n).padStart(3, "0");
 
-      //   return (
-      //     `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ` +
-      //     `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}.` +
-      //     `${pad3(d.getMilliseconds())}`
-      //   );
-      // };
+    //   return (
+    //     `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ` +
+    //     `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}.` +
+    //     `${pad3(d.getMilliseconds())}`
+    //   );
+    // };
 
-      // ---- compcode resolve (header / params / query) ----
-      const compcode = pick(
-        req.headers.compcode,
-        req.params.compcode,
-        req.query.compcode,
-      );
-      if (!compcode) {
-        return res.status(400).json({
+    // ---- compcode resolve (header / params / query) ----
+    const compcode = pick(
+      req.headers.compcode,
+      req.params.compcode,
+      req.query.compcode,
+    );
+    if (!compcode) {
+      return res.status(400).json({
+        Status: false,
+        Message:
+          "compcode is required (send in header OR /:compcode param OR query)",
+      });
+    }
+
+    sequelize = await dbname(req, compcode);
+
+    const body = req.body || {};
+    const callId = extractCallId(body);
+
+    // ============================================================
+    // ✅ MODE-2 (FRONTEND): vehicle_number -> MST -> FOLLOWUP_DETAILS -> call_webhook_dtl
+    // ============================================================
+    const vehicle_number = pick(
+      body.vehicle_number,
+      body.VEHICAL_REG_NO,
+      body.vehicleNumber,
+    );
+
+    // Agar callId nahi hai but vehicle_number hai => DB linking se details do
+    if (!callId && vehicle_number) {
+      const cleanVeh = cleanVehicleNo(vehicle_number);
+
+      const normExpr = (col) =>
+        `REPLACE(REPLACE(REPLACE(UPPER(LTRIM(RTRIM(ISNULL(${col},'')))),' ',''),'-',''),'/','')`;
+
+      // 1) Find MST by vehicle reg no
+      const mstSql = `
+            SELECT TOP 1
+              mst.UTD,
+              mst.VEHICAL_REG_NO
+            FROM dbo.INSU_RENEWAL_MST mst
+            WHERE ISNULL(mst.EXPORT_TYPE,0) = 1
+              AND ${normExpr("mst.VEHICAL_REG_NO")} = :cleanVeh
+            ORDER BY mst.UTD DESC
+          `;
+
+      const mstRows = await sequelize.query(mstSql, {
+        replacements: { cleanVeh },
+        type: QueryTypes.SELECT,
+      });
+
+      if (!mstRows?.length) {
+        return res.status(404).json({
           Status: false,
-          Message:
-            "compcode is required (send in header OR /:compcode param OR query)",
+          Message: "Vehicle not found in INSU_RENEWAL_MST",
+          vehicle_number,
         });
       }
 
-      sequelize = await dbname(req, compcode);
+      const mst = mstRows[0];
 
-      const body = req.body || {};
-      const callId = extractCallId(body);
+      // 2) Find all call_ids for this vehicle
+      const allCallIdsSql = `
+            SELECT DISTINCT LTRIM(RTRIM(x.call_id)) AS call_id
+            FROM (
+              -- 1) Any FOLLOWUP_DETAILS for all MST UTDs of this vehicle
+              SELECT fd.call_id
+              FROM dbo.FOLLOWUP_DETAILS fd
+              INNER JOIN dbo.INSU_RENEWAL_MST m ON m.UTD = fd.TRAN_ID
+              WHERE fd.call_id IS NOT NULL AND LTRIM(RTRIM(fd.call_id)) <> ''
+                AND REPLACE(REPLACE(REPLACE(UPPER(LTRIM(RTRIM(ISNULL(m.VEHICAL_REG_NO,'')))),' ',''),'-',''),'/','') = :cleanVeh
 
-      // ============================================================
-      // ✅ MODE-2 (FRONTEND): vehicle_number -> MST -> FOLLOWUP_DETAILS -> call_webhook_dtl
-      // ============================================================
-      const vehicle_number = pick(
-        body.vehicle_number,
-        body.VEHICAL_REG_NO,
-        body.vehicleNumber,
-      );
+              UNION
 
-      // Agar callId nahi hai but vehicle_number hai => DB linking se details do
-      if (!callId && vehicle_number) {
-        const cleanVeh = cleanVehicleNo(vehicle_number);
+              -- 2) Any FOLLOWUP_DETAILS for INSU_RENEWAL of this vehicle
+              SELECT fd.call_id
+              FROM dbo.FOLLOWUP_DETAILS fd
+              INNER JOIN dbo.INSU_RENEWAL r ON (r.TRAN_ID = fd.TRAN_ID OR r.UTD = fd.TRAN_ID)
+              WHERE fd.call_id IS NOT NULL AND LTRIM(RTRIM(fd.call_id)) <> ''
+                AND REPLACE(REPLACE(REPLACE(UPPER(LTRIM(RTRIM(ISNULL(r.VEHICAL_REG_NO,'')))),' ',''),'-',''),'/','') = :cleanVeh
+            ) x
+            WHERE x.call_id IS NOT NULL AND LTRIM(RTRIM(x.call_id)) <> ''
+          `;
 
-        const normExpr = (col) =>
-          `REPLACE(REPLACE(REPLACE(UPPER(LTRIM(RTRIM(ISNULL(${col},'')))),' ',''),'-',''),'/','')`;
+      const callIdRows = await sequelize.query(allCallIdsSql, {
+        replacements: { cleanVeh },
+        type: QueryTypes.SELECT,
+      });
 
-        // 1) Find MST by vehicle reg no
-        const mstSql = `
-          SELECT TOP 1
-            mst.UTD,
-            mst.VEHICAL_REG_NO
-          FROM dbo.INSU_RENEWAL_MST mst
-          WHERE ISNULL(mst.EXPORT_TYPE,0) = 1
-            AND ${normExpr("mst.VEHICAL_REG_NO")} = :cleanVeh
-          ORDER BY mst.UTD DESC
-        `;
+      const callIds = (callIdRows || []).map((r) => r.call_id).filter(Boolean);
 
-        const mstRows = await sequelize.query(mstSql, {
-          replacements: { cleanVeh },
-          type: QueryTypes.SELECT,
-        });
-
-        if (!mstRows?.length) {
-          return res.status(404).json({
-            Status: false,
-            Message: "Vehicle not found in INSU_RENEWAL_MST",
-            vehicle_number,
-          });
-        }
-
-        const mst = mstRows[0];
-
-        // 2) Find all call_ids for this vehicle
-        const allCallIdsSql = `
-          SELECT DISTINCT LTRIM(RTRIM(x.call_id)) AS call_id
-          FROM (
-            -- 1) Any FOLLOWUP_DETAILS for all MST UTDs of this vehicle
-            SELECT fd.call_id
-            FROM dbo.FOLLOWUP_DETAILS fd
-            INNER JOIN dbo.INSU_RENEWAL_MST m ON m.UTD = fd.TRAN_ID
-            WHERE fd.call_id IS NOT NULL AND LTRIM(RTRIM(fd.call_id)) <> ''
-              AND REPLACE(REPLACE(REPLACE(UPPER(LTRIM(RTRIM(ISNULL(m.VEHICAL_REG_NO,'')))),' ',''),'-',''),'/','') = :cleanVeh
-
-            UNION
-
-            -- 2) Any call_Id_dtl for customer's mobile number
-            SELECT cid.call_id
-            FROM dbo.call_Id_dtl cid
-            INNER JOIN dbo.INSU_RENEWAL r ON r.TRAN_ID = :tranId
-            WHERE cid.call_id IS NOT NULL AND LTRIM(RTRIM(cid.call_id)) <> ''
-              AND RIGHT(REPLACE(REPLACE(REPLACE(ISNULL(cid.mob_no,''),' ',''),'-',''),'+',''), 10) =
-                  RIGHT(REPLACE(REPLACE(REPLACE(ISNULL(r.CUST_MOB_NO,''),' ',''),'-',''),'+',''), 10)
-
-            UNION
-
-            -- 3) Any call_webhook_dtl for customer's mobile number
-            SELECT w.call_id
-            FROM dbo.call_webhook_dtl w
-            INNER JOIN dbo.INSU_RENEWAL r ON r.TRAN_ID = :tranId
-            WHERE w.call_id IS NOT NULL AND LTRIM(RTRIM(w.call_id)) <> ''
-              AND RIGHT(REPLACE(REPLACE(REPLACE(ISNULL(w.phone_number,''),' ',''),'-',''),'+',''), 10) =
-                  RIGHT(REPLACE(REPLACE(REPLACE(ISNULL(r.CUST_MOB_NO,''),' ',''),'-',''),'+',''), 10)
-          ) x
-          WHERE x.call_id IS NOT NULL AND LTRIM(RTRIM(x.call_id)) <> ''
-        `;
-
-        const callIdRows = await sequelize.query(allCallIdsSql, {
-          replacements: { tranId: mst.UTD, cleanVeh },
-          type: QueryTypes.SELECT,
-        });
-
-        const callIds = (callIdRows || []).map((r) => r.call_id).filter(Boolean);
-
-        if (!callIds.length) {
-          return res.status(200).json({
-            Status: true,
-            Message: "No call records found for this vehicle",
-            vehicle_number,
-            mst: {
-              UTD: mst.UTD,
-              VEHICAL_REG_NO: mst.VEHICAL_REG_NO,
-            },
-            data: [],
-          });
-        }
-
-        // 3) Auto-sync pending or incomplete call details from Callmatic API
-        for (const cId of callIds) {
-          try {
-            const existing = await sequelize.query(
-              `SELECT TOP 1 status, transcript, summary, duration, recording_url FROM dbo.call_webhook_dtl WHERE call_id = :callId`,
-              { replacements: { callId: cId }, type: QueryTypes.SELECT }
-            );
-            const st = String(existing?.[0]?.status || '').toUpperCase();
-            const isTerminal = ['COMPLETED', 'ENDED', 'FINISHED', 'FAILED', 'BUSY', 'NO_ANSWER', 'CANCELED'].includes(st);
-
-            if (!existing?.length || !isTerminal) {
-              const apiRes = await getCallStatus(cId);
-              if (apiRes) {
-                await saveCallWebhookDetails(sequelize, cId, apiRes);
-              }
-            }
-          } catch (syncErr) {
-            console.error("[WEBHOOK SYNC] Error fetching status for callId:", cId, syncErr?.message);
-          }
-        }
-
-        // 4) Fetch webhook details from call_webhook_dtl
-        const webhookSql = `
-          SELECT TOP 50
-            w.call_id,
-            w.campaign_id,
-            w.direction,
-            w.phone_number,
-            w.status,
-            CONVERT(varchar(19), w.triggered_at, 120) AS triggered_at,
-            CONVERT(varchar(19), w.start_time, 120)   AS start_time,
-            CONVERT(varchar(19), w.end_time, 120)     AS end_time,
-            w.duration,
-            w.ring_time,
-            w.summary,
-            w.transcript,
-            w.callee_name,
-            w.category,
-            w.recording_url,
-            CONVERT(varchar(19), w.created_at, 120)   AS created_at
-          FROM dbo.call_webhook_dtl w
-          WHERE w.call_id IN (:callIds)
-          ORDER BY COALESCE(w.start_time, w.triggered_at, w.created_at) DESC, w.created_at DESC
-        `;
-        const webhookRows = await sequelize.query(webhookSql, {
-          replacements: { callIds },
-          type: QueryTypes.SELECT,
-        });
-
+      if (!callIds.length) {
         return res.status(200).json({
           Status: true,
-          Message: "Webhook details fetched by vehicle_number",
+          Message: "No call records found for this vehicle",
           vehicle_number,
           mst: {
             UTD: mst.UTD,
             VEHICAL_REG_NO: mst.VEHICAL_REG_NO,
           },
-          data: webhookRows || [],
+          data: [],
         });
       }
 
-      // ============================================================
-      // ✅ MODE-1 (WEBHOOK RECEIVER): callId required
-      // ============================================================
-      if (!callId) {
-        return res.status(400).json({
-          Status: false,
-          Message:
-            "callId is required (not found in webhook payload) OR send vehicle_number",
-          ReceivedKeys: Object.keys(body || {}),
-        });
-      }
+      // 3) Auto-sync pending or incomplete call details from Callmatic API
+      for (const cId of callIds) {
+        try {
+          const existing = await sequelize.query(
+            `SELECT TOP 1 status, transcript, summary, duration, recording_url FROM dbo.call_webhook_dtl WHERE call_id = :callId`,
+            { replacements: { callId: cId }, type: QueryTypes.SELECT }
+          );
+          const st = String(existing?.[0]?.status || '').toUpperCase();
+          const isTerminal = ['COMPLETED', 'ENDED', 'FINISHED', 'FAILED', 'BUSY', 'NO_ANSWER', 'CANCELED'].includes(st);
+          const isMissingSummary = ['COMPLETED', 'ENDED', 'FINISHED'].includes(st) && (!existing?.[0]?.summary || String(existing[0].summary).trim() === '');
 
-      // 1) Get latest call info from Callmatic API (fallback / enrichment)
-      let callDetails = null;
-      try {
-        callDetails = await getCallStatus(callId);
-      } catch (e) {
-        callDetails = null;
-        console.error("[WEBHOOK] getCallStatus failed:", e?.message);
-      }
-
-      const payload = req.body || {};
-      const api = callDetails || {};
-
-      await saveCallWebhookDetails(sequelize, callId, { ...api, ...payload });
-
-      const status = pick(payload.status, payload.call?.status, api.status, api.call?.status, api.callStatus) || null;
-
-      // ============================================================
-      // ✅ AUTO WHATSAPP: Call complete hone ke baad WhatsApp bhejo
-      //    status === "completed" AND call type = INSURANCE_RENEWAL
-      // ============================================================
-      let whatsappTriggered = false;
-      if (status && status.toLowerCase() === "completed" && phone_number) {
-        setImmediate(async () => {
-          let waSeq;
-          try {
-            waSeq = await dbname(req, compcode);
-
-            const cleanPhone = String(phone_number).replace(/\D/g, "").slice(-10);
-            const renewalSql = `
-              SELECT TOP 1
-                m.UTD        AS MST_UTD,
-                m.VEHICAL_REG_NO,
-                m.LOC_CODE,
-                r.CUST_NAME,
-                r.CUST_MOB_NO,
-                r.POLICY_NAME,
-                r.MODEL_NAME
-              FROM dbo.INSU_RENEWAL r
-              INNER JOIN dbo.INSU_RENEWAL_MST m
-                ON m.UTD = r.TRAN_ID
-              WHERE ISNULL(m.EXPORT_TYPE, 0) = 1
-                AND r.EXPORT_TYPE = 1
-                AND RIGHT(REPLACE(REPLACE(REPLACE(ISNULL(r.CUST_MOB_NO,''),' ',''),'-',''),'+',''), 10) = :cleanPhone
-              ORDER BY r.UTD DESC
-            `;
-
-            const renewalRows = await waSeq.query(renewalSql, {
-              replacements: { cleanPhone },
-              type: QueryTypes.SELECT,
-            });
-
-            if (!renewalRows?.length) {
-              console.log("[AUTO-WA] No INSURANCE_RENEWAL record found for phone:", cleanPhone);
-              return;
-            }
-
-            const wRow = renewalRows[0];
-            const mstUtd = wRow.MST_UTD;
-
-            let questionsCount = 0;
-            try {
-              const qRows = await waSeq.query(`
-                SELECT COUNT(*) AS cnt FROM dbo.INSU_QUESTIONS
-                WHERE (Is_Active = '1' OR Is_Active = 'true' OR Is_Active = 'Y' OR Is_Active IS NULL)
-              `, { type: QueryTypes.SELECT });
-              questionsCount = qRows?.[0]?.cnt ?? 0;
-            } catch (_) { }
-
-            const encodedCompCode = Buffer.from(compcode).toString("base64");
-            const encodedUTD = Buffer.from(String(mstUtd)).toString("base64");
-            const customerWebLink = `${process.env.BASE_URL || ""}/Crm/InsuranceRenewalCustomerView?compcode=${encodedCompCode}&utd=${encodedUTD}`;
-
-            const customerName = wRow.CUST_NAME || "Valued Customer";
-            const vehicleNo = wRow.VEHICAL_REG_NO || "N/A";
-            const policyName = wRow.POLICY_NAME || "Insurance Provider";
-
-            const waParams = [
-              { type: "text", text: customerName },
-              { type: "text", text: vehicleNo },
-              { type: "text", text: policyName },
-              { type: "text", text: customerWebLink },
-            ];
-
-            const waResult = await SendWhatsAppMessgae(
-              compcode,
-              wRow.CUST_MOB_NO,
-              "insurance_template",
-              waParams
-            );
-
-            console.log("[AUTO-WA] WhatsApp sent after call completion:", {
-              compcode,
-              mstUtd,
-              vehicleNo,
-              mobile: wRow.CUST_MOB_NO,
-              questionsCount,
-              waResult,
-            });
-
-          } catch (waErr) {
-            console.error("[AUTO-WA] WhatsApp trigger failed:", waErr?.message || waErr);
-          } finally {
-            if (waSeq) {
-              try { await waSeq.close(); } catch (_) { }
+          if (!existing?.length || !isTerminal || isMissingSummary) {
+            const apiRes = await getCallStatus1(cId);
+            if (apiRes) {
+              await saveCallWebhookDetails(sequelize, cId, apiRes);
             }
           }
-        });
-        whatsappTriggered = true;
+        } catch (syncErr) {
+          console.error("[WEBHOOK SYNC] Error fetching status for callId:", cId, syncErr?.message);
+        }
       }
+
+      // 4) Fetch webhook details from call_webhook_dtl
+      const webhookSql = `
+            ;WITH RankedCalls AS (
+              SELECT
+                w.call_id,
+                w.campaign_id,
+                w.direction,
+                w.phone_number,
+                w.status,
+                CONVERT(varchar(19), w.triggered_at, 120) AS triggered_at,
+                CONVERT(varchar(19), w.start_time, 120)   AS start_time,
+                CONVERT(varchar(19), w.end_time, 120)     AS end_time,
+                w.duration,
+                w.ring_time,
+                w.summary,
+                w.transcript,
+                w.callee_name,
+                w.category,
+                w.recording_url,
+                CONVERT(varchar(19), w.created_at, 120)   AS created_at,
+                w.created_at                              AS raw_created_at,
+                w.start_time                              AS raw_start_time,
+                w.triggered_at                            AS raw_triggered_at,
+                ROW_NUMBER() OVER (
+                  PARTITION BY LTRIM(RTRIM(w.call_id))
+                  ORDER BY 
+                    CASE WHEN UPPER(ISNULL(w.status,'')) IN ('COMPLETED','ENDED','FINISHED') THEN 1 ELSE 2 END,
+                    COALESCE(w.end_time, w.start_time, w.triggered_at, w.created_at) DESC,
+                    w.created_at DESC
+                ) AS rn
+              FROM dbo.call_webhook_dtl w
+              WHERE w.call_id IN (:callIds)
+            )
+            SELECT TOP 50
+              call_id,
+              campaign_id,
+              direction,
+              phone_number,
+              status,
+              triggered_at,
+              start_time,
+              end_time,
+              duration,
+              ring_time,
+              summary,
+              transcript,
+              callee_name,
+              category,
+              recording_url,
+              created_at
+            FROM RankedCalls
+            WHERE rn = 1
+            ORDER BY COALESCE(raw_start_time, raw_triggered_at, raw_created_at) DESC, raw_created_at DESC
+          `;
+      const webhookRows = await sequelize.query(webhookSql, {
+        replacements: { callIds },
+        type: QueryTypes.SELECT,
+      });
+
+      const cleanedWebhookRows = (webhookRows || []).map((row) => ({
+        ...row,
+        summary: extractCleanSummary(row.summary),
+      }));
 
       return res.status(200).json({
         Status: true,
-        Message: "Webhook processed successfully",
-        callId,
-        saved: { status, duration, phone_number, campaign_id },
-        transcript: transcriptRaw ?? null,
-        summary: summary ?? null,
-        insights: insights ?? null,
-        whatsappTriggered,
+        Message: "Webhook details fetched by vehicle_number",
+        vehicle_number,
+        mst: {
+          UTD: mst.UTD,
+          VEHICAL_REG_NO: mst.VEHICAL_REG_NO,
+        },
+        data: cleanedWebhookRows,
       });
-    } catch (err) {
-      console.error(
-        "[WEBHOOK] ERROR:",
-        err?.original?.message || err?.message || err,
-      );
-      return res.status(500).json({
-        Status: false,
-        Message: err?.original?.message || err?.message || "Webhook error",
-      });
-    } finally {
-      if (sequelize) {
-        try {
-          await sequelize.close();
-        } catch (_) { }
-      }
     }
-  };
+
+    // ============================================================
+    // ✅ MODE-1 (WEBHOOK RECEIVER): callId required
+    // ============================================================
+    if (!callId) {
+      return res.status(400).json({
+        Status: false,
+        Message:
+          "callId is required (not found in webhook payload) OR send vehicle_number",
+        ReceivedKeys: Object.keys(body || {}),
+      });
+    }
+
+    // 1) Get latest call info from Callmatic API (fallback / enrichment)
+    let callDetails = null;
+    try {
+      callDetails = await getCallStatus1(callId);
+    } catch (e) {
+      callDetails = null;
+      console.error("[WEBHOOK] getCallStatus failed:", e?.message);
+    }
+
+    const payload = req.body || {};
+    const api = callDetails || {};
+
+    await saveCallWebhookDetails(sequelize, callId, { ...api, ...payload });
+
+    const status = pick(payload.status, payload.call?.status, api.status, api.call?.status, api.callStatus) || null;
+
+    // ============================================================
+    // ✅ AUTO WHATSAPP: Call complete hone ke baad WhatsApp bhejo
+    //    status === "completed" AND call type = INSURANCE_RENEWAL
+    // ============================================================
+    let whatsappTriggered = false;
+    if (status && status.toLowerCase() === "completed" && phone_number) {
+      setImmediate(async () => {
+        let waSeq;
+        try {
+          waSeq = await dbname(req, compcode);
+
+          const cleanPhone = String(phone_number).replace(/\D/g, "").slice(-10);
+          const renewalSql = `
+                SELECT TOP 1
+                  m.UTD        AS MST_UTD,
+                  m.VEHICAL_REG_NO,
+                  m.LOC_CODE,
+                  r.CUST_NAME,
+                  r.CUST_MOB_NO,
+                  r.POLICY_NAME,
+                  r.MODEL_NAME
+                FROM dbo.INSU_RENEWAL r
+                INNER JOIN dbo.INSU_RENEWAL_MST m
+                  ON m.UTD = r.TRAN_ID
+                WHERE ISNULL(m.EXPORT_TYPE, 0) = 1
+                  AND r.EXPORT_TYPE = 1
+                  AND RIGHT(REPLACE(REPLACE(REPLACE(ISNULL(r.CUST_MOB_NO,''),' ',''),'-',''),'+',''), 10) = :cleanPhone
+                ORDER BY r.UTD DESC
+              `;
+
+          const renewalRows = await waSeq.query(renewalSql, {
+            replacements: { cleanPhone },
+            type: QueryTypes.SELECT,
+          });
+
+          if (!renewalRows?.length) {
+            console.log("[AUTO-WA] No INSURANCE_RENEWAL record found for phone:", cleanPhone);
+            return;
+          }
+
+          const wRow = renewalRows[0];
+          const mstUtd = wRow.MST_UTD;
+
+          let questionsCount = 0;
+          try {
+            const qRows = await waSeq.query(`
+                  SELECT COUNT(*) AS cnt FROM dbo.INSU_QUESTIONS
+                  WHERE (Is_Active = '1' OR Is_Active = 'true' OR Is_Active = 'Y' OR Is_Active IS NULL)
+                `, { type: QueryTypes.SELECT });
+            questionsCount = qRows?.[0]?.cnt ?? 0;
+          } catch (_) { }
+
+          const encodedCompCode = Buffer.from(compcode).toString("base64");
+          const encodedUTD = Buffer.from(String(mstUtd)).toString("base64");
+          const customerWebLink = `${process.env.BASE_URL || ""}/Crm/InsuranceRenewalCustomerView?compcode=${encodedCompCode}&utd=${encodedUTD}`;
+
+          const customerName = wRow.CUST_NAME || "Valued Customer";
+          const vehicleNo = wRow.VEHICAL_REG_NO || "N/A";
+          const policyName = wRow.POLICY_NAME || "Insurance Provider";
+
+          const waParams = [
+            { type: "text", text: customerName },
+            { type: "text", text: vehicleNo },
+            { type: "text", text: policyName },
+            { type: "text", text: customerWebLink },
+          ];
+
+          const waResult = await SendWhatsAppMessgae(
+            compcode,
+            wRow.CUST_MOB_NO,
+            "insurance_template",
+            waParams
+          );
+
+          console.log("[AUTO-WA] WhatsApp sent after call completion:", {
+            compcode,
+            mstUtd,
+            vehicleNo,
+            mobile: wRow.CUST_MOB_NO,
+            questionsCount,
+            waResult,
+          });
+
+        } catch (waErr) {
+          console.error("[AUTO-WA] WhatsApp trigger failed:", waErr?.message || waErr);
+        } finally {
+          if (waSeq) {
+            try { await waSeq.close(); } catch (_) { }
+          }
+        }
+      });
+      whatsappTriggered = true;
+    }
+
+    return res.status(200).json({
+      Status: true,
+      Message: "Webhook processed successfully",
+      callId,
+      saved: { status, duration, phone_number, campaign_id },
+      transcript: transcriptRaw ?? null,
+      summary: summary ?? null,
+      insights: insights ?? null,
+      whatsappTriggered,
+    });
+  } catch (err) {
+    console.error(
+      "[WEBHOOK] ERROR:",
+      err?.original?.message || err?.message || err,
+    );
+    return res.status(500).json({
+      Status: false,
+      Message: err?.original?.message || err?.message || "Webhook error",
+    });
+  } finally {
+    if (sequelize) {
+      try {
+        await sequelize.close();
+      } catch (_) { }
+    }
+  }
+};
 
 exports.getCallingCustomers = async function (req, res) {
   let sequelize;
@@ -6074,39 +6461,66 @@ exports.getCallingHistoryByMobile = async function (req, res) {
       return res.status(400).json({ ok: false, Message: "mob_no or vehicle_number required" });
     }
 
-    const findIdsSql = `
-      ;WITH AllCallIds AS (
-        -- 1) Calls in call_Id_dtl for this mobile (manual trigger, renewal, followup, schedule)
-        SELECT DISTINCT cid.call_id
-        FROM dbo.call_Id_dtl cid
-        WHERE cid.call_id IS NOT NULL AND LTRIM(RTRIM(cid.call_id)) <> ''
-          AND :mob10 IS NOT NULL
-          AND RIGHT(REPLACE(REPLACE(REPLACE(ISNULL(cid.mob_no,''),' ',''),'-',''),'+',''), 10) = :mob10
+    let findIdsSql = "";
+    let replacements = {};
 
-        UNION
+    if (cleanVeh) {
+      // Jab vehicle_number available ho -> Sirf is vehicle se linked calls hi aayengi
+      findIdsSql = `
+        ;WITH AllCallIds AS (
+          -- 1) Calls linked in FOLLOWUP_DETAILS for this vehicle via INSU_RENEWAL_MST
+          SELECT DISTINCT fd.call_id
+          FROM dbo.FOLLOWUP_DETAILS fd
+          INNER JOIN dbo.INSU_RENEWAL_MST m ON m.UTD = fd.TRAN_ID
+          WHERE fd.call_id IS NOT NULL AND LTRIM(RTRIM(fd.call_id)) <> ''
+            AND REPLACE(REPLACE(REPLACE(UPPER(LTRIM(RTRIM(ISNULL(m.VEHICAL_REG_NO,'')))),' ',''),'-',''),'/','') = :cleanVeh
 
-        -- 2) Calls directly in call_webhook_dtl for this phone number
-        SELECT DISTINCT w.call_id
-        FROM dbo.call_webhook_dtl w
-        WHERE w.call_id IS NOT NULL AND LTRIM(RTRIM(w.call_id)) <> ''
-          AND :mob10 IS NOT NULL
-          AND RIGHT(REPLACE(REPLACE(REPLACE(ISNULL(w.phone_number,''),' ',''),'-',''),'+',''), 10) = :mob10
+          UNION
 
-        UNION
+          -- 2) Calls linked in FOLLOWUP_DETAILS for this vehicle via INSU_RENEWAL
+          SELECT DISTINCT fd.call_id
+          FROM dbo.FOLLOWUP_DETAILS fd
+          INNER JOIN dbo.INSU_RENEWAL r ON (r.TRAN_ID = fd.TRAN_ID OR r.UTD = fd.TRAN_ID)
+          WHERE fd.call_id IS NOT NULL AND LTRIM(RTRIM(fd.call_id)) <> ''
+            AND REPLACE(REPLACE(REPLACE(UPPER(LTRIM(RTRIM(ISNULL(r.VEHICAL_REG_NO,'')))),' ',''),'-',''),'/','') = :cleanVeh
+        )
+        SELECT DISTINCT call_id FROM AllCallIds WHERE call_id IS NOT NULL AND LTRIM(RTRIM(call_id)) <> '';
+      `;
+      replacements = { cleanVeh };
+    } else {
+      // Jab sirf mobile number ho (vehicle_number na ho) -> Mobile number se saari calls aayengi
+      findIdsSql = `
+        ;WITH AllCallIds AS (
+          -- 1) Calls in call_Id_dtl for this mobile (manual trigger, renewal, followup, schedule)
+          SELECT DISTINCT cid.call_id
+          FROM dbo.call_Id_dtl cid
+          WHERE cid.call_id IS NOT NULL AND LTRIM(RTRIM(cid.call_id)) <> ''
+            AND RIGHT(REPLACE(REPLACE(REPLACE(ISNULL(cid.mob_no,''),' ',''),'-',''),'+',''), 10) = :mob10
 
-        -- 3) Scheduled calls, follow-up calls & AI calls linked in FOLLOWUP_DETAILS for this vehicle
-        SELECT DISTINCT fd.call_id
-        FROM dbo.FOLLOWUP_DETAILS fd
-        INNER JOIN dbo.INSU_RENEWAL_MST m ON m.UTD = fd.TRAN_ID
-        WHERE fd.call_id IS NOT NULL AND LTRIM(RTRIM(fd.call_id)) <> ''
-          AND :cleanVeh IS NOT NULL
-          AND REPLACE(REPLACE(REPLACE(UPPER(LTRIM(RTRIM(ISNULL(m.VEHICAL_REG_NO,'')))),' ',''),'-',''),'/','') = :cleanVeh
-      )
-      SELECT DISTINCT call_id FROM AllCallIds WHERE call_id IS NOT NULL AND LTRIM(RTRIM(call_id)) <> '';
-    `;
+          UNION
+
+          -- 2) Calls directly in call_webhook_dtl for this phone number
+          SELECT DISTINCT w.call_id
+          FROM dbo.call_webhook_dtl w
+          WHERE w.call_id IS NOT NULL AND LTRIM(RTRIM(w.call_id)) <> ''
+            AND RIGHT(REPLACE(REPLACE(REPLACE(ISNULL(w.phone_number,''),' ',''),'-',''),'+',''), 10) = :mob10
+
+          UNION
+
+          -- 3) Calls in FOLLOWUP_DETAILS for customer's mobile
+          SELECT DISTINCT fd.call_id
+          FROM dbo.FOLLOWUP_DETAILS fd
+          INNER JOIN dbo.INSU_RENEWAL r ON (r.TRAN_ID = fd.TRAN_ID OR r.UTD = fd.TRAN_ID)
+          WHERE fd.call_id IS NOT NULL AND LTRIM(RTRIM(fd.call_id)) <> ''
+            AND RIGHT(REPLACE(REPLACE(REPLACE(ISNULL(r.CUST_MOB_NO,''),' ',''),'-',''),'+',''), 10) = :mob10
+        )
+        SELECT DISTINCT call_id FROM AllCallIds WHERE call_id IS NOT NULL AND LTRIM(RTRIM(call_id)) <> '';
+      `;
+      replacements = { mob10 };
+    }
 
     const idRows = await sequelize.query(findIdsSql, {
-      replacements: { mob10: mob10 || null, cleanVeh: cleanVeh || null },
+      replacements,
       type: QueryTypes.SELECT,
     });
 
@@ -6125,9 +6539,10 @@ exports.getCallingHistoryByMobile = async function (req, res) {
         );
         const st = String(existing?.[0]?.status || '').toUpperCase();
         const isTerminal = ['COMPLETED', 'ENDED', 'FINISHED', 'FAILED', 'BUSY', 'NO_ANSWER', 'CANCELED'].includes(st);
+        const isMissingSummary = ['COMPLETED', 'ENDED', 'FINISHED'].includes(st) && (!existing?.[0]?.summary || String(existing[0].summary).trim() === '' || String(existing[0].summary).includes('"actionType"') || String(existing[0].summary).startsWith('{'));
 
-        if (!existing?.length || !isTerminal) {
-          const apiRes = await getCallStatus(cId);
+        if (!existing?.length || !isTerminal || isMissingSummary) {
+          const apiRes = await getCallStatus1(cId);
           if (apiRes) {
             await saveCallWebhookDetails(sequelize, cId, apiRes);
           }
@@ -6138,26 +6553,57 @@ exports.getCallingHistoryByMobile = async function (req, res) {
     }
 
     const sql = `
+      ;WITH RankedCalls AS (
+        SELECT
+          w.call_id,
+          w.campaign_id,
+          w.direction,
+          w.phone_number,
+          w.status,
+          CONVERT(varchar(19), w.triggered_at, 120) AS triggered_at,
+          CONVERT(varchar(19), w.start_time, 120)   AS start_time,
+          CONVERT(varchar(19), w.end_time, 120)     AS end_time,
+          w.duration,
+          w.ring_time,
+          w.summary,
+          w.transcript,
+          w.callee_name,
+          w.category,
+          w.recording_url,
+          CONVERT(varchar(19), w.created_at, 120)   AS created_at,
+          w.created_at                              AS raw_created_at,
+          w.start_time                              AS raw_start_time,
+          w.triggered_at                            AS raw_triggered_at,
+          ROW_NUMBER() OVER (
+            PARTITION BY LTRIM(RTRIM(w.call_id))
+            ORDER BY 
+              CASE WHEN UPPER(ISNULL(w.status,'')) IN ('COMPLETED','ENDED','FINISHED') THEN 1 ELSE 2 END,
+              COALESCE(w.end_time, w.start_time, w.triggered_at, w.created_at) DESC,
+              w.created_at DESC
+          ) AS rn
+        FROM dbo.call_webhook_dtl w
+        WHERE w.call_id IN (:allCallIds)
+      )
       SELECT TOP 200
-        w.call_id,
-        w.campaign_id,
-        w.direction,
-        w.phone_number,
-        w.status,
-        CONVERT(varchar(19), w.triggered_at, 120) AS triggered_at,
-        CONVERT(varchar(19), w.start_time, 120)   AS start_time,
-        CONVERT(varchar(19), w.end_time, 120)     AS end_time,
-        w.duration,
-        w.ring_time,
-        w.summary,
-        w.transcript,
-        w.callee_name,
-        w.category,
-        w.recording_url,
-        CONVERT(varchar(19), w.created_at, 120)   AS created_at
-      FROM dbo.call_webhook_dtl w
-      WHERE w.call_id IN (:allCallIds)
-      ORDER BY COALESCE(w.start_time, w.triggered_at, w.created_at) DESC, w.created_at DESC;
+        call_id,
+        campaign_id,
+        direction,
+        phone_number,
+        status,
+        triggered_at,
+        start_time,
+        end_time,
+        duration,
+        ring_time,
+        summary,
+        transcript,
+        callee_name,
+        category,
+        recording_url,
+        created_at
+      FROM RankedCalls
+      WHERE rn = 1
+      ORDER BY COALESCE(raw_start_time, raw_triggered_at, raw_created_at) DESC, raw_created_at DESC;
     `;
 
     const data = await sequelize.query(sql, {
@@ -6165,7 +6611,12 @@ exports.getCallingHistoryByMobile = async function (req, res) {
       type: QueryTypes.SELECT,
     });
 
-    return res.status(200).json({ ok: true, data: data || [] });
+    const cleanedData = (data || []).map((row) => ({
+      ...row,
+      summary: extractCleanSummary(row.summary),
+    }));
+
+    return res.status(200).json({ ok: true, data: cleanedData });
   } catch (err) {
     return res
       .status(500)
@@ -6212,7 +6663,7 @@ exports.streamCallRecordingByCallId = async function (req, res) {
     }
 
     // ✅ stream from Callmatic (API key server side)
-    await getCallRecording(callId, res);
+    await getCallRecording1(callId, res);
   } catch (err) {
     console.error("streamCallRecordingByCallId error:", err?.message);
     return res.status(500).send(err?.message || "Recording stream failed");
@@ -6900,7 +7351,10 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
     }
 
     const locFilterMSQL = locCodes.length
-      ? `AND m.loc_code IN (:locCodes)`
+      ? `AND (m.loc_code IN (:locCodes) OR m.loc_code IS NULL OR m.loc_code = 0)`
+      : "";
+    const locFilterPSQL = locCodes.length
+      ? `AND (m.loc_code IN (:locCodes) OR m.loc_code IS NULL OR m.loc_code = 0)`
       : "";
 
     // ✅ FIXED: सभी queries को अलग अलग filter variables दिए
@@ -6909,19 +7363,43 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
 
     // For KPI, Tables, Distribution queries (based on m.CREATED_AT)
     let dateFilterSQL = "";
+    let pymtDateFilterSQL = "";
     if (fromDate && toDate) {
       dateFilterSQL = ` AND CAST(m.CREATED_AT AS DATE) BETWEEN :fromDate AND :toDate`;
+      pymtDateFilterSQL = ` AND (
+        CAST(COALESCE(p.PYMT_DATE, p.CREATED_AT, m.CREATED_AT) AS DATE) BETWEEN :fromDate AND :toDate
+        OR CAST(p.CREATED_AT AS DATE) BETWEEN :fromDate AND :toDate
+        OR p.PYMT_DATE IS NULL
+      )`;
       replacements.fromDate = fromDate;
       replacements.toDate = toDate;
     } else if (fromDate) {
       dateFilterSQL = ` AND CAST(m.CREATED_AT AS DATE) >= :fromDate`;
+      pymtDateFilterSQL = ` AND (
+        CAST(COALESCE(p.PYMT_DATE, p.CREATED_AT, m.CREATED_AT) AS DATE) >= :fromDate
+        OR CAST(p.CREATED_AT AS DATE) >= :fromDate
+        OR p.PYMT_DATE IS NULL
+      )`;
       replacements.fromDate = fromDate;
     } else if (toDate) {
       dateFilterSQL = ` AND CAST(m.CREATED_AT AS DATE) <= :toDate`;
+      pymtDateFilterSQL = ` AND (
+        CAST(COALESCE(p.PYMT_DATE, p.CREATED_AT, m.CREATED_AT) AS DATE) <= :toDate
+        OR CAST(p.CREATED_AT AS DATE) <= :toDate
+        OR p.PYMT_DATE IS NULL
+      )`;
       replacements.toDate = toDate;
     } else {
-      // Default live dashboard: only current month created policies
-      dateFilterSQL = ` AND CAST(m.CREATED_AT AS DATE) BETWEEN DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1) AND EOMONTH(GETDATE())`;
+      // Default live dashboard: only current month created policies & payments
+      dateFilterSQL = ` AND (
+        CAST(m.CREATED_AT AS DATE) BETWEEN DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1) AND EOMONTH(GETDATE())
+        OR m.CREATED_AT IS NULL
+      )`;
+      pymtDateFilterSQL = ` AND (
+        CAST(COALESCE(p.PYMT_DATE, p.CREATED_AT, m.CREATED_AT) AS DATE) BETWEEN DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1) AND EOMONTH(GETDATE())
+        OR CAST(p.CREATED_AT AS DATE) BETWEEN DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1) AND EOMONTH(GETDATE())
+        OR p.PYMT_DATE IS NULL
+      )`;
     }
 
     // Period date filter (based on m.CREATED_AT)
@@ -6963,7 +7441,7 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
     // ─────────────────────────────────────────────────────────────
     // 4. KPI STATS
     // ─────────────────────────────────────────────────────────────
-    const kpiQuery = `
+    const policyKpiQuery = `
       SELECT
         COUNT(DISTINCT m.UTD) AS totalPolicies,
 
@@ -6981,35 +7459,7 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
                AND DATEADD(day, 30, CAST(GETDATE() AS DATE))
           THEN m.UTD END) AS expiringIn30Days,
 
-        COUNT(DISTINCT CASE
-          WHEN p.PYMT_STATUS = 1 AND p.ACNT_APPR_STATUS = 1
-          THEN p.TRAN_ID END) AS approvedPaymentsCount,
-
-        COUNT(DISTINCT CASE
-          WHEN p.PYMT_STATUS = 1 AND p.ACNT_APPR_STATUS = 0
-          THEN p.TRAN_ID END) AS rejectedPaymentsCount,
-
-        COUNT(DISTINCT CASE
-          WHEN p.PYMT_STATUS = 1 AND p.ACNT_APPR_STATUS IS NULL
-          THEN p.TRAN_ID END) AS pendingPaymentsCount,
-
-        COUNT(DISTINCT CASE
-          WHEN p.PYMT_STATUS = 1
-          THEN p.TRAN_ID END) AS totalPaymentsCount,
-
-        ISNULL(SUM(CASE
-          WHEN p.PYMT_STATUS = 1 AND p.ACNT_APPR_STATUS = 1
-          THEN p.PYMT_AMOUNT ELSE 0 END), 0) AS totalCollectedAmount,
-
-        ISNULL(SUM(CASE
-          WHEN p.PYMT_STATUS = 1 AND p.ACNT_APPR_STATUS = 0
-          THEN p.PYMT_AMOUNT ELSE 0 END), 0) AS totalRejectedAmount,
-
-        ISNULL(SUM(CASE
-          WHEN p.PYMT_STATUS = 1 AND p.ACNT_APPR_STATUS IS NULL
-          THEN p.PYMT_AMOUNT ELSE 0 END), 0) AS totalPendingAmount,
-
-        ISNULL(SUM(COALESCE(NULLIF(r.PREMIUM_AMOUNT, 0), NULLIF(p.PREMIUM_AMOUNT, 0), p.PYMT_AMOUNT, 0)), 0) AS totalPremiumAmount
+        ISNULL(SUM(COALESCE(NULLIF(r.PREMIUM_AMOUNT, 0), 0)), 0) AS totalPremiumAmount
 
       FROM dbo.INSU_RENEWAL_MST m
       OUTER APPLY (
@@ -7017,27 +7467,84 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
           ir.POLICY_END_DATE,
           ir.PREMIUM_AMOUNT
         FROM dbo.INSU_RENEWAL ir
-        WHERE ir.TRAN_ID = m.UTD
+        WHERE (ir.TRAN_ID = m.UTD OR (m.VEHICAL_REG_NO IS NOT NULL AND REPLACE(UPPER(ir.VEHICAL_REG_NO), ' ', '') = REPLACE(UPPER(m.VEHICAL_REG_NO), ' ', '')))
           AND ISNULL(ir.EXPORT_TYPE, 1) = :exportType
         ORDER BY ir.UTD DESC
       ) r
-      LEFT JOIN dbo.INSU_RENEWAL_PYMT p
-        ON p.TRAN_ID = m.UTD
-        AND p.PYMT_STATUS = 1
       WHERE ISNULL(m.EXPORT_TYPE, 1) = :exportType
         ${locFilterMSQL}
         ${dateFilterSQL}
     `;
 
-    const [kpiStats] = await sequelize.query(kpiQuery, {
+    const [policyKpiStats] = await sequelize.query(policyKpiQuery, {
       replacements,
       type: QueryTypes.SELECT,
     });
 
-    console.log("[Dashboard] KPI Stats:", kpiStats);
+    const paymentKpiQuery = `
+      ;WITH DistinctPymt AS (
+        SELECT 
+          p.UTD,
+          p.TRAN_ID,
+          p.ACNT_APPR_STATUS,
+          p.ACNT_APPR_REMARK,
+          p.ACNT_APPR_CODE,
+          p.ACNT_APPR_DATE,
+          p.PYMT_AMOUNT,
+          p.PREMIUM_AMOUNT,
+          ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(NULLIF(LTRIM(RTRIM(m.VEHICAL_REG_NO)), ''), CAST(p.TRAN_ID AS VARCHAR))
+            ORDER BY p.UTD DESC
+          ) AS rn
+        FROM dbo.INSU_RENEWAL_PYMT p
+        LEFT JOIN dbo.INSU_RENEWAL_MST m
+          ON m.UTD = p.TRAN_ID
+        WHERE p.PYMT_STATUS = 1
+          ${locFilterPSQL}
+          ${pymtDateFilterSQL}
+      )
+      SELECT
+        COUNT(CASE
+          WHEN p.ACNT_APPR_STATUS = 1
+          THEN p.UTD END) AS approvedPaymentsCount,
+
+        COUNT(CASE
+          WHEN p.ACNT_APPR_STATUS = 2 OR (p.ACNT_APPR_STATUS = 0 AND (NULLIF(p.ACNT_APPR_REMARK, '') IS NOT NULL OR NULLIF(p.ACNT_APPR_CODE, '') IS NOT NULL OR p.ACNT_APPR_DATE IS NOT NULL))
+          THEN p.UTD END) AS rejectedPaymentsCount,
+
+        COUNT(CASE
+          WHEN p.ACNT_APPR_STATUS IS NULL OR (p.ACNT_APPR_STATUS = 0 AND NULLIF(p.ACNT_APPR_REMARK, '') IS NULL AND NULLIF(p.ACNT_APPR_CODE, '') IS NULL AND p.ACNT_APPR_DATE IS NULL)
+          THEN p.UTD END) AS pendingPaymentsCount,
+
+        COUNT(p.UTD) AS totalPaymentsCount,
+
+        ISNULL(SUM(CASE
+          WHEN p.ACNT_APPR_STATUS = 1
+          THEN p.PYMT_AMOUNT ELSE 0 END), 0) AS totalCollectedAmount,
+
+        ISNULL(SUM(CASE
+          WHEN p.ACNT_APPR_STATUS = 2 OR (p.ACNT_APPR_STATUS = 0 AND (NULLIF(p.ACNT_APPR_REMARK, '') IS NOT NULL OR NULLIF(p.ACNT_APPR_CODE, '') IS NOT NULL OR p.ACNT_APPR_DATE IS NOT NULL))
+          THEN p.PYMT_AMOUNT ELSE 0 END), 0) AS totalRejectedAmount,
+
+        ISNULL(SUM(CASE
+          WHEN p.ACNT_APPR_STATUS IS NULL OR (p.ACNT_APPR_STATUS = 0 AND NULLIF(p.ACNT_APPR_REMARK, '') IS NULL AND NULLIF(p.ACNT_APPR_CODE, '') IS NULL AND p.ACNT_APPR_DATE IS NULL)
+          THEN p.PYMT_AMOUNT ELSE 0 END), 0) AS totalPendingAmount,
+
+        ISNULL(SUM(COALESCE(NULLIF(p.PREMIUM_AMOUNT, 0), p.PYMT_AMOUNT, 0)), 0) AS totalPaymentPremium
+
+      FROM DistinctPymt p
+      WHERE p.rn = 1
+    `;
+
+    const [paymentKpiStats] = await sequelize.query(paymentKpiQuery, {
+      replacements,
+      type: QueryTypes.SELECT,
+    });
+
+    console.log("[Dashboard] Policy KPI Stats:", policyKpiStats, "Payment KPI Stats:", paymentKpiStats);
 
     // ─────────────────────────────────────────────────────────────
-    // 5. REMINDERS
+    // 5. REMINDERS (Month-wise / Date Filtered)
     // ─────────────────────────────────────────────────────────────
     const reminderReplacements = {
       ...replacements,
@@ -7045,6 +7552,21 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
       afterDays,
       afterDaysNeg: -afterDays,
     };
+
+    let reminderDateFilterSQL = "";
+    if (fromDate && toDate) {
+      reminderDateFilterSQL = ` AND CAST(r.POLICY_END_DATE AS DATE) BETWEEN :fromDate AND :toDate`;
+      reminderReplacements.fromDate = fromDate;
+      reminderReplacements.toDate = toDate;
+    } else if (fromDate) {
+      reminderDateFilterSQL = ` AND CAST(r.POLICY_END_DATE AS DATE) >= :fromDate`;
+      reminderReplacements.fromDate = fromDate;
+    } else if (toDate) {
+      reminderDateFilterSQL = ` AND CAST(r.POLICY_END_DATE AS DATE) <= :toDate`;
+      reminderReplacements.toDate = toDate;
+    } else {
+      reminderDateFilterSQL = ` AND CAST(r.POLICY_END_DATE AS DATE) BETWEEN DATEFROMPARTS(YEAR(GETDATE()), MONTH(GETDATE()), 1) AND EOMONTH(GETDATE())`;
+    }
 
     const reminderQuery = `
       ;WITH BlockedVehicles AS (
@@ -7066,12 +7588,10 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
       SELECT
         COUNT(CASE
           WHEN CAST(r.POLICY_END_DATE AS DATE) >= CAST(GETDATE() AS DATE)
-               AND CAST(r.POLICY_END_DATE AS DATE) <= DATEADD(day, :beforeDays, CAST(GETDATE() AS DATE))
                THEN 1 END) AS beforeExpiryReminders,
 
         COUNT(CASE
           WHEN CAST(r.POLICY_END_DATE AS DATE) < CAST(GETDATE() AS DATE)
-               AND CAST(r.POLICY_END_DATE AS DATE) >= DATEADD(day, :afterDaysNeg, CAST(GETDATE() AS DATE))
                THEN 1 END) AS afterExpiryReminders
 
       FROM dbo.INSU_RENEWAL r
@@ -7082,6 +7602,7 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
         AND ISNULL(m.EXPORT_TYPE, 1) = :exportType
         AND bv.VEH_KEY IS NULL
         ${locFilterMSQL}
+        ${reminderDateFilterSQL}
     `;
 
     const [reminderStats] = await sequelize.query(reminderQuery, {
@@ -7135,28 +7656,28 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
 
         COUNT(DISTINCT r.UTD)                            AS totalExpiring,
 
-        COUNT(DISTINCT CASE
+        COUNT(CASE
           WHEN p.PYMT_STATUS = 1 AND p.ACNT_APPR_STATUS = 1
-          THEN p.TRAN_ID END)                            AS approvedCount,
+          THEN p.UTD END)                            AS approvedCount,
 
-        COUNT(DISTINCT CASE
-          WHEN p.PYMT_STATUS = 1 AND p.ACNT_APPR_STATUS IS NULL
-          THEN p.TRAN_ID END)                            AS pendingCount,
+        COUNT(CASE
+          WHEN p.PYMT_STATUS = 1 AND (p.ACNT_APPR_STATUS IS NULL OR (p.ACNT_APPR_STATUS = 0 AND NULLIF(p.ACNT_APPR_REMARK, '') IS NULL AND NULLIF(p.ACNT_APPR_CODE, '') IS NULL AND p.ACNT_APPR_DATE IS NULL))
+          THEN p.UTD END)                            AS pendingCount,
 
-        COUNT(DISTINCT CASE
-          WHEN p.PYMT_STATUS = 1 AND p.ACNT_APPR_STATUS = 0
-          THEN p.TRAN_ID END)                            AS rejectedCount,
+        COUNT(CASE
+          WHEN p.PYMT_STATUS = 1 AND (p.ACNT_APPR_STATUS = 2 OR (p.ACNT_APPR_STATUS = 0 AND (NULLIF(p.ACNT_APPR_REMARK, '') IS NOT NULL OR NULLIF(p.ACNT_APPR_CODE, '') IS NOT NULL OR p.ACNT_APPR_DATE IS NOT NULL)))
+          THEN p.UTD END)                            AS rejectedCount,
 
         ISNULL(SUM(CASE
           WHEN p.PYMT_STATUS = 1 AND p.ACNT_APPR_STATUS = 1
           THEN p.PYMT_AMOUNT ELSE 0 END), 0)             AS collectedAmount,
 
         ISNULL(SUM(CASE
-          WHEN p.PYMT_STATUS = 1 AND p.ACNT_APPR_STATUS = 0
+          WHEN p.PYMT_STATUS = 1 AND (p.ACNT_APPR_STATUS = 2 OR (p.ACNT_APPR_STATUS = 0 AND (NULLIF(p.ACNT_APPR_REMARK, '') IS NOT NULL OR NULLIF(p.ACNT_APPR_CODE, '') IS NOT NULL OR p.ACNT_APPR_DATE IS NOT NULL)))
           THEN p.PYMT_AMOUNT ELSE 0 END), 0)             AS rejectedAmount,
 
         ISNULL(SUM(CASE
-          WHEN p.PYMT_STATUS = 1 AND p.ACNT_APPR_STATUS IS NULL
+          WHEN p.PYMT_STATUS = 1 AND (p.ACNT_APPR_STATUS IS NULL OR (p.ACNT_APPR_STATUS = 0 AND NULLIF(p.ACNT_APPR_REMARK, '') IS NULL AND NULLIF(p.ACNT_APPR_CODE, '') IS NULL AND p.ACNT_APPR_DATE IS NULL))
           THEN p.PYMT_AMOUNT ELSE 0 END), 0)             AS pendingAmount,
 
         ISNULL(SUM(COALESCE(NULLIF(r.PREMIUM_AMOUNT, 0), NULLIF(p.PREMIUM_AMOUNT, 0), p.PYMT_AMOUNT, 0)), 0) AS totalPremiumAmount,
@@ -7199,16 +7720,16 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
       SELECT
         COUNT(DISTINCT r.UTD)                            AS periodTotalPolicies,
 
-        COUNT(DISTINCT CASE
+        COUNT(CASE
           WHEN p.PYMT_STATUS = 1 AND p.ACNT_APPR_STATUS = 1
           THEN p.UTD END)                                AS periodApprovedCount,
 
-        COUNT(DISTINCT CASE
-          WHEN p.PYMT_STATUS = 1 AND p.ACNT_APPR_STATUS IS NULL
+        COUNT(CASE
+          WHEN p.PYMT_STATUS = 1 AND (p.ACNT_APPR_STATUS IS NULL OR (p.ACNT_APPR_STATUS = 0 AND NULLIF(p.ACNT_APPR_REMARK, '') IS NULL AND NULLIF(p.ACNT_APPR_CODE, '') IS NULL AND p.ACNT_APPR_DATE IS NULL))
           THEN p.UTD END)                                AS periodPendingCount,
 
-        COUNT(DISTINCT CASE
-          WHEN p.PYMT_STATUS = 1 AND p.ACNT_APPR_STATUS = 0
+        COUNT(CASE
+          WHEN p.PYMT_STATUS = 1 AND (p.ACNT_APPR_STATUS = 2 OR (p.ACNT_APPR_STATUS = 0 AND (NULLIF(p.ACNT_APPR_REMARK, '') IS NOT NULL OR NULLIF(p.ACNT_APPR_CODE, '') IS NOT NULL OR p.ACNT_APPR_DATE IS NOT NULL)))
           THEN p.UTD END)                                AS periodRejectedCount,
 
         ISNULL(SUM(CASE
@@ -7216,11 +7737,11 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
           THEN p.PYMT_AMOUNT ELSE 0 END), 0)             AS periodCollectedAmount,
 
         ISNULL(SUM(CASE
-          WHEN p.PYMT_STATUS = 1 AND p.ACNT_APPR_STATUS IS NULL
+          WHEN p.PYMT_STATUS = 1 AND (p.ACNT_APPR_STATUS IS NULL OR (p.ACNT_APPR_STATUS = 0 AND NULLIF(p.ACNT_APPR_REMARK, '') IS NULL AND NULLIF(p.ACNT_APPR_CODE, '') IS NULL AND p.ACNT_APPR_DATE IS NULL))
           THEN p.PYMT_AMOUNT ELSE 0 END), 0)             AS periodPendingAmount,
 
         ISNULL(SUM(CASE
-          WHEN p.PYMT_STATUS = 1 AND p.ACNT_APPR_STATUS = 0
+          WHEN p.PYMT_STATUS = 1 AND (p.ACNT_APPR_STATUS = 2 OR (p.ACNT_APPR_STATUS = 0 AND (NULLIF(p.ACNT_APPR_REMARK, '') IS NOT NULL OR NULLIF(p.ACNT_APPR_CODE, '') IS NOT NULL OR p.ACNT_APPR_DATE IS NOT NULL)))
           THEN p.PYMT_AMOUNT ELSE 0 END), 0)             AS periodRejectedAmount,
 
         ISNULL(SUM(COALESCE(NULLIF(r.PREMIUM_AMOUNT, 0), NULLIF(p.PREMIUM_AMOUNT, 0), p.PYMT_AMOUNT, 0)), 0) AS periodTotalPremium
@@ -7439,17 +7960,42 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
       return Number.isFinite(prem) && prem > 0;
     });
 
-    // C) All Payments (Approved, Pending, Rejected)
     const allPaymentsQuery = `
+      ;WITH DistinctPymt AS (
+        SELECT 
+          p.UTD,
+          p.TRAN_ID,
+          p.PYMT_AMOUNT,
+          p.PYMT_MODE,
+          p.PYMT_DATE,
+          p.BANK_NAME,
+          p.ACNT_APPR_STATUS,
+          p.ACNT_APPR_REMARK,
+          p.ACNT_APPR_CODE,
+          p.ACNT_APPR_DATE,
+          p.REMARKS,
+          p.PYMT_REMARK,
+          ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(NULLIF(LTRIM(RTRIM(m.VEHICAL_REG_NO)), ''), CAST(p.TRAN_ID AS VARCHAR))
+            ORDER BY p.UTD DESC
+          ) AS rn
+        FROM dbo.INSU_RENEWAL_PYMT p
+        LEFT JOIN dbo.INSU_RENEWAL_MST m
+          ON m.UTD = p.TRAN_ID
+        WHERE p.PYMT_STATUS = 1
+          ${locFilterPSQL}
+          ${pymtDateFilterSQL}
+      )
       SELECT TOP 500
-        p.UTD AS PYMT_UTD,
+        p.UTD                                         AS UTD,
+        p.UTD                                         AS PYMT_UTD,
         p.TRAN_ID,
-        m.VEHICAL_REG_NO,
-        r.CUST_NAME,
-        CAST(r.CUST_MOB_NO AS NVARCHAR(20))          AS CUST_MOB_NO,
-        r.POLICY_NAME,
-        CAST(r.POLICY_NUMBER AS NVARCHAR(100))        AS POLICY_NUMBER,
-        r.MODEL_NAME,
+        COALESCE(m.VEHICAL_REG_NO, r.VEHICAL_REG_NO, '') AS VEHICAL_REG_NO,
+        ISNULL(r.CUST_NAME, '')                       AS CUST_NAME,
+        CAST(ISNULL(r.CUST_MOB_NO, '') AS NVARCHAR(20)) AS CUST_MOB_NO,
+        ISNULL(r.POLICY_NAME, '')                     AS POLICY_NAME,
+        CAST(ISNULL(r.POLICY_NUMBER, '') AS NVARCHAR(100)) AS POLICY_NUMBER,
+        ISNULL(r.MODEL_NAME, '')                      AS MODEL_NAME,
         ISNULL(p.PYMT_AMOUNT, 0)                      AS PYMT_AMOUNT,
         p.PYMT_MODE,
         CONVERT(varchar(10), p.PYMT_DATE, 105)        AS PYMT_DATE,
@@ -7457,24 +8003,22 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
         p.ACNT_APPR_STATUS,
         CASE 
           WHEN p.ACNT_APPR_STATUS = 1 THEN 'APPROVED'
-          WHEN p.ACNT_APPR_STATUS = 0 THEN 'REJECTED'
+          WHEN p.ACNT_APPR_STATUS = 2 OR (p.ACNT_APPR_STATUS = 0 AND (NULLIF(p.ACNT_APPR_REMARK, '') IS NOT NULL OR NULLIF(p.ACNT_APPR_CODE, '') IS NOT NULL OR p.ACNT_APPR_DATE IS NOT NULL)) THEN 'REJECTED'
           ELSE 'PENDING'
         END AS APPROVAL_STATUS_LABEL,
         p.ACNT_APPR_REMARK,
         p.REMARKS,
         p.PYMT_REMARK
-      FROM dbo.INSU_RENEWAL_PYMT p
-      INNER JOIN dbo.INSU_RENEWAL_MST m ON m.UTD = p.TRAN_ID
+      FROM DistinctPymt p
+      LEFT JOIN dbo.INSU_RENEWAL_MST m ON m.UTD = p.TRAN_ID
       OUTER APPLY (
-        SELECT TOP 1 ir.CUST_NAME, ir.CUST_MOB_NO, ir.POLICY_NAME, ir.POLICY_NUMBER, ir.MODEL_NAME, ir.POLICY_END_DATE
+        SELECT TOP 1 ir.CUST_NAME, ir.CUST_MOB_NO, ir.POLICY_NAME, ir.POLICY_NUMBER, ir.MODEL_NAME, ir.POLICY_END_DATE, ir.VEHICAL_REG_NO
         FROM dbo.INSU_RENEWAL ir
-        WHERE ir.TRAN_ID = m.UTD AND ISNULL(ir.EXPORT_TYPE, 1) = :exportType
+        WHERE (ir.TRAN_ID = m.UTD OR (m.VEHICAL_REG_NO IS NOT NULL AND REPLACE(UPPER(ir.VEHICAL_REG_NO), ' ', '') = REPLACE(UPPER(m.VEHICAL_REG_NO), ' ', '')) OR ir.TRAN_ID = p.TRAN_ID)
+          AND ISNULL(ir.EXPORT_TYPE, 1) = :exportType
         ORDER BY ir.UTD DESC
       ) r
-      WHERE p.PYMT_STATUS = 1
-        AND ISNULL(m.EXPORT_TYPE, 1) = :exportType
-        ${locFilterMSQL}
-        ${dateFilterSQL}
+      WHERE p.rn = 1
       ORDER BY p.UTD DESC
     `;
 
@@ -7483,11 +8027,9 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
       type: QueryTypes.SELECT,
     });
 
-    const approvedPayments = allPayments.filter((p) => p.ACNT_APPR_STATUS === 1);
-    const pendingPayments = allPayments.filter(
-      (p) => p.ACNT_APPR_STATUS === null || p.ACNT_APPR_STATUS === undefined
-    );
-    const rejectedPayments = allPayments.filter((p) => p.ACNT_APPR_STATUS === 0);
+    const approvedPayments = allPayments.filter((p) => p.APPROVAL_STATUS_LABEL === "APPROVED");
+    const pendingPayments = allPayments.filter((p) => p.APPROVAL_STATUS_LABEL === "PENDING");
+    const rejectedPayments = allPayments.filter((p) => p.APPROVAL_STATUS_LABEL === "REJECTED");
 
     // D) Reminders List (Before & After Expiry)
     const allRemindersQuery = `
@@ -7540,12 +8082,8 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
       WHERE ISNULL(r.EXPORT_TYPE, 1) = :exportType
         AND ISNULL(m.EXPORT_TYPE, 1) = :exportType
         AND bv.VEH_KEY IS NULL
-        AND (
-          (CAST(r.POLICY_END_DATE AS DATE) >= CAST(GETDATE() AS DATE) AND CAST(r.POLICY_END_DATE AS DATE) <= DATEADD(day, :beforeDays, CAST(GETDATE() AS DATE)))
-          OR
-          (CAST(r.POLICY_END_DATE AS DATE) < CAST(GETDATE() AS DATE) AND CAST(r.POLICY_END_DATE AS DATE) >= DATEADD(day, :afterDaysNeg, CAST(GETDATE() AS DATE)))
-        )
         ${locFilterMSQL}
+        ${reminderDateFilterSQL}
       ORDER BY r.POLICY_END_DATE ASC
     `;
 
@@ -7581,10 +8119,10 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
           },
         },
         summary: {
-          totalPolicies: parseInt(kpiStats?.totalPolicies ?? 0, 10),
-          activePolicies: parseInt(kpiStats?.activePolicies ?? 0, 10),
-          expiredPolicies: parseInt(kpiStats?.expiredPolicies ?? 0, 10),
-          expiringIn30Days: parseInt(kpiStats?.expiringIn30Days ?? 0, 10),
+          totalPolicies: parseInt(policyKpiStats?.totalPolicies ?? 0, 10),
+          activePolicies: parseInt(policyKpiStats?.activePolicies ?? 0, 10),
+          expiredPolicies: parseInt(policyKpiStats?.expiredPolicies ?? 0, 10),
+          expiringIn30Days: parseInt(policyKpiStats?.expiringIn30Days ?? 0, 10),
           reminders: {
             beforeExpiry: parseInt(
               reminderStats?.beforeExpiryReminders ?? 0,
@@ -7598,18 +8136,20 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
             afterDays,
           },
           payments: {
-            approvedCount: parseInt(kpiStats?.approvedPaymentsCount ?? 0, 10),
-            rejectedCount: parseInt(kpiStats?.rejectedPaymentsCount ?? 0, 10),
-            pendingCount: parseInt(kpiStats?.pendingPaymentsCount ?? 0, 10),
-            totalCount: parseInt(kpiStats?.totalPaymentsCount ?? 0, 10),
+            approvedCount: parseInt(paymentKpiStats?.approvedPaymentsCount ?? 0, 10),
+            rejectedCount: parseInt(paymentKpiStats?.rejectedPaymentsCount ?? 0, 10),
+            pendingCount: parseInt(paymentKpiStats?.pendingPaymentsCount ?? 0, 10),
+            totalCount: parseInt(paymentKpiStats?.totalPaymentsCount ?? 0, 10),
             totalCollectedAmount: parseFloat(
-              kpiStats?.totalCollectedAmount ?? 0
+              paymentKpiStats?.totalCollectedAmount ?? 0
             ),
             totalRejectedAmount: parseFloat(
-              kpiStats?.totalRejectedAmount ?? 0
+              paymentKpiStats?.totalRejectedAmount ?? 0
             ),
-            totalPendingAmount: parseFloat(kpiStats?.totalPendingAmount ?? 0),
-            totalPremiumAmount: parseFloat(kpiStats?.totalPremiumAmount ?? 0),
+            totalPendingAmount: parseFloat(paymentKpiStats?.totalPendingAmount ?? 0),
+            totalPremiumAmount: parseFloat(
+              (policyKpiStats?.totalPremiumAmount || paymentKpiStats?.totalPaymentPremium) ?? 0
+            ),
           },
           periodSummary: {
             periodType: periodTypeFinal,
@@ -7672,7 +8212,7 @@ exports.getInsuranceDashboardMetrics = async (req, res) => {
   }
 };
 
-exports.OD_report = async function (req, res) {
+exports.OD_report_With_Pic = async function (req, res) {
   const sequelize = await dbname(req, req.query.compcode);
   try {
     const data = req.body;
@@ -8708,9 +9248,6 @@ exports.getPendingInsuranceByExecutive = async function (req, res) {
       replacements.fromMobile = String(body.from_exec_mobile).trim();
     }
 
-    // ✅ Expiry filter - 30 days
-    whereConditions.push(`DATEDIFF(DAY, GETDATE(), ir.POLICY_END_DATE) <= 30`);
-
     // ✅ NULL check
     whereConditions.push(`ir.POLICY_END_DATE IS NOT NULL`);
 
@@ -9273,7 +9810,6 @@ exports.getExpiringInsuranceRenewals = async function (req, res) {
     }
   }
 };
-
 
 
 exports.SendInsuranceRenewalWhatsAppToCustomer = async function (req, res) {
@@ -10081,6 +10617,7 @@ exports.SaveInsuranceCustomerResponse = async function (req, res) {
   }
 };
 
+
 function escapeHtml(str) {
   if (!str) return '';
   return String(str)
@@ -10091,3 +10628,147 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
+// ============================================================
+// GET CUSTOMER INSURANCE QUESTIONS & ANSWERS RESPONSES (FOR MODAL)
+// ============================================================
+exports.getCustomerInsuranceResponses = async function (req, res) {
+  let sequelize;
+  try {
+    const { cust_name, vehicle_number, vehical_reg_no, mob_no, utd } = req.body || {};
+    const compcode = req.headers.compcode || req.body?.compcode;
+
+    if (!compcode) {
+      return res.status(400).send({ success: false, message: "compcode is required" });
+    }
+
+    sequelize = await dbname(req, compcode);
+
+    let customerName = cust_name ? String(cust_name).trim() : "";
+    let vehicleNo = vehicle_number || vehical_reg_no || "";
+    let callId = null;
+
+    // If customerName is not passed or we have UTD/vehicle, resolve customer name and get CALL_ID
+    if (!customerName && (utd || vehicleNo || mob_no)) {
+      const whereConditions = [];
+      const replacements = {};
+
+      if (utd) {
+        whereConditions.push(`(m.UTD = :utd OR r.TRAN_ID = :utd)`);
+        replacements.utd = utd;
+      }
+      if (vehicleNo) {
+        whereConditions.push(`(m.VEHICAL_REG_NO = :vehNo OR r.VEHICAL_REG_NO = :vehNo)`);
+        replacements.vehNo = String(vehicleNo).trim().toUpperCase();
+      }
+      if (mob_no) {
+        whereConditions.push(`(r.CUST_MOB_NO LIKE :mob)`);
+        replacements.mob = `%${String(mob_no).replace(/\D/g, "").slice(-10)}%`;
+      }
+
+      if (whereConditions.length > 0) {
+        const [[custRow]] = await sequelize.query(`
+          SELECT TOP 1 r.CUST_NAME, m.VEHICAL_REG_NO, r.TRAN_ID, r.CUST_MOB_NO
+          FROM dbo.INSU_RENEWAL r
+          LEFT JOIN dbo.INSU_RENEWAL_MST m ON m.UTD = r.TRAN_ID
+          WHERE (${whereConditions.join(" OR ")})
+            AND (r.EXPORT_TYPE = 1 OR r.EXPORT_TYPE IS NULL)
+          ORDER BY r.UTD DESC
+        `, { replacements });
+
+        if (custRow) {
+          customerName = custRow.CUST_NAME || "";
+          vehicleNo = custRow.VEHICAL_REG_NO || vehicleNo;
+
+          // ✅ NOW: Get CALL_ID from call_webhook_dtl table
+          // Match करो: CUST_MOB_NO या TRAN_ID के हिसाब से
+          let callIdQuery = `
+            SELECT TOP 1 CALL_ID
+            FROM dbo.call_webhook_dtl
+            WHERE 1=1
+          `;
+
+          if (custRow.CUST_MOB_NO) {
+            callIdQuery += ` AND CUST_MOB_NO = :mobNo`;
+            replacements.mobNo = custRow.CUST_MOB_NO;
+          }
+
+          callIdQuery += ` ORDER BY CREATED_AT DESC`;
+
+          const [[callRow]] = await sequelize.query(callIdQuery, { replacements });
+          if (callRow && callRow.CALL_ID) {
+            callId = callRow.CALL_ID;
+          }
+        }
+      }
+    }
+
+    const cleanCustName = customerName ? customerName.replace(/'/g, "''").substring(0, 50) : "";
+
+    // Fetch Questions and matching Answers filtered by CALL_ID if available
+    let questionsQuery = `
+      SELECT 
+        q.UTD AS question_id,
+        q.Question_Text,
+        q.Question_Type,
+        q.PAYMENT_AMOUNT,
+        q.Options,
+        q.Sort_Order,
+        a.UTD AS answer_id,
+        a.Answer_Text,
+        CONVERT(varchar(19), a.CREATED_AT, 120) AS answered_at,
+        a.Created_By AS answered_by,
+        a.CALL_ID
+      FROM dbo.INSU_QUESTIONS q
+      LEFT JOIN dbo.INSU_ANSWERS a 
+        ON CAST(a.TRAN_ID AS VARCHAR) = CAST(q.UTD AS VARCHAR)
+        AND a.Created_By = :cleanCustName
+        AND (a.EXPORT_TYPE = 1 OR a.EXPORT_TYPE IS NULL)
+    `;
+
+    const replacements2 = { cleanCustName };
+
+    // ✅ Add CALL_ID filter if available
+    if (callId) {
+      questionsQuery += ` AND a.CALL_ID = :callId`;
+      replacements2.callId = callId;
+    }
+
+    questionsQuery += `
+      WHERE (q.Is_Active = '1' OR q.Is_Active = 'true' OR q.Is_Active = 'Y' OR q.Is_Active IS NULL)
+      ORDER BY q.Sort_Order ASC, q.UTD ASC
+    `;
+
+    const questionsAndAnswers = await sequelize.query(questionsQuery, {
+      replacements: replacements2,
+      type: sequelize.QueryTypes.SELECT,
+    });
+
+    const hasSubmitted = (questionsAndAnswers || []).some(
+      (qa) => qa.Answer_Text && String(qa.Answer_Text).trim().length > 0
+    );
+
+    const firstAnswer = (questionsAndAnswers || []).find(
+      (qa) => qa.Answer_Text && qa.answered_at
+    );
+
+    return res.status(200).send({
+      success: true,
+      customerName,
+      vehicleNo,
+      callId,
+      hasSubmitted,
+      submittedAt: firstAnswer ? firstAnswer.answered_at : null,
+      responses: questionsAndAnswers || [],
+    });
+
+  } catch (err) {
+    console.error("getCustomerInsuranceResponses ERROR:", err);
+    return res.status(500).send({ success: false, message: err.message });
+  } finally {
+    if (sequelize) {
+      try {
+        await sequelize.close();
+      } catch (_) { }
+    }
+  }
+};

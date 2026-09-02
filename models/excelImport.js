@@ -15,7 +15,7 @@ const Insu_Renewal = function (sequelize, DataTypes) {
 
       CUST_NAME: {
         type: DataTypes.STRING(100), // NVARCHAR(100)
-        allowNull: false,
+        allowNull: true,
       },
 
       CUST_MOB_NO: {
@@ -25,12 +25,12 @@ const Insu_Renewal = function (sequelize, DataTypes) {
 
       POLICY_NAME: {
         type: DataTypes.STRING(100), // NVARCHAR(100)
-        allowNull: false,
+        allowNull: true,
       },
 
       POLICY_NUMBER: {
         type: DataTypes.STRING(100), // VARCHAR(100)
-        allowNull: false,
+        allowNull: true,
       },
 
       VEHICAL_REG_NO: {
@@ -45,12 +45,12 @@ const Insu_Renewal = function (sequelize, DataTypes) {
 
       POLICY_START_DATE: {
         type: DataTypes.DATEONLY, // DATE
-        allowNull: false,
+        allowNull: true,
       },
 
       POLICY_END_DATE: {
         type: DataTypes.DATEONLY, // DATE
-        allowNull: false,
+        allowNull: true,
       },
       TRAN_ID: {
         type: DataTypes.INTEGER,
@@ -71,21 +71,21 @@ const Insu_Renewal = function (sequelize, DataTypes) {
 
       CREATED_AT: {
         type: DataTypes.DATE, // DATETIME
-        allowNull: false,
+        allowNull: true,
       },
 
       // Temporal columns (GENERATED ALWAYS) -> import me inko insert/update mat bhejna
       VALIDFROM: {
         type: DataTypes.DATE, // DATETIME2
-        allowNull: false,
+        allowNull: true,
       },
       VALIDTO: {
         type: DataTypes.DATE, // DATETIME2
-        allowNull: false,
+        allowNull: true,
       },
       EXPORT_TYPE: {
         type: DataTypes.INTEGER,
-        allowNull: false,
+        allowNull: true,
         defaultValue: 1,
       },
     },
@@ -119,8 +119,9 @@ const insuRenewalSchema = Joi.object({
   POLICY_NAME: Joi.string().max(100).required(),
 
   POLICY_NUMBER: Joi.alternatives()
-    .try(Joi.string().pattern(/^\d+$/).max(19), Joi.number().integer())
-    .required(),
+    .try(Joi.string().max(100), Joi.number().integer())
+    .allow(null, "")
+    .optional(),
 
   VEHICAL_REG_NO: Joi.string().max(20).allow(null, ""),
   MODEL_NAME: Joi.string().max(100).allow(null, ""),
