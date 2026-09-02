@@ -15,9 +15,8 @@ const paymentUpload = multer({
   limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
 });
 
-
-router.get("/sampel", Crm.downloadInsuranceRenualSampleExcel); // ✅ yaha multer ki need nahi
-router.post("/import", excelUpload, Crm.importInsuRenewalExcel); // ✅ yaha multer zaroori hai
+router.get("/sampel", Crm.downloadInsuranceRenualSampleExcel); 
+router.post("/import", excelUpload, Crm.importInsuRenewalExcel); 
 router.post("/filter", Crm.getInsuRenewalByDateRange);
 router.post("/reminders", Crm.getInsuRenewalReminders);
 router.post('/followup',Crm.saveInsuRenewalFollowupByVehicle)
@@ -31,7 +30,6 @@ router.post("/approval",Crm.updateInsuranceRenewalApproval)
 router.post("/getApprovedOne", Crm.getAllApprovedInsuranceRenewals);
 router.post('/makecall',Crm.makeInsuranceRenewalCall)
 router.post("/webhook", Crm.callmaticWebhook);
-// routes/excel.js (example)
 router.post("/calling/customers", Crm.getCallingCustomers);
 router.post("/calling/history", Crm.getCallingHistoryByMobile);
 router.get("/calling/recording/:callId", Crm.streamCallRecordingByCallId);
@@ -40,10 +38,10 @@ router.post("/insucalling/save", Crm.createInsuCallingConfig);
 router.put("/insucalling/update", Crm.updateInsuCallingConfig);
 router.patch("/insucalling/toggle", Crm.toggleInsuCallingConfigStatus);
 router.post('/dashboard',Crm.getInsuranceDashboardMetrics)
-router.post('/od',Crm.OD_report); 
+router.post('/OD_report_With_Pic',Crm.OD_report_With_Pic); 
 router.post('/bonvoice',express.raw({type: 'application/json'}),Crm.bonvoiceWebhook)
 router.post('/attendance',Crm.attendance_pivot_report)
-router.post("/getPendingTasksByExecutive",   Crm.getPendingInsuranceByExecutive);
+router.post("/getPendingInsuranceByExecutive",   Crm.getPendingInsuranceByExecutive);
 router.post("/getEmployees",Crm.getInsuranceExecutives)
 router.post("/transferInsuranceWorkload", Crm.transferInsuranceWorkload);
 router.post('/aniversery/today',Crm.getEmployeeAnniversaries)
@@ -52,6 +50,7 @@ router.post('/assignwork',Crm.assignInsuranceRenewalsToDSE)
 router.post('/insu/whatsapp',Crm.SendInsuranceRenewalWhatsAppToCustomer)
 router.get('/InsuranceRenewalCustomerView', Crm.InsuranceRenewalCustomerView);
 router.post('/SaveInsuranceCustomerResponse', Crm.SaveInsuranceCustomerResponse);
+router.post('/customer-responses', Crm.getCustomerInsuranceResponses);
 // router.post('/getDSEOwnTasks', excel.getDSEOwnTasks);
 // router.post('/getReportingManagerTeamTasks', excel.getReportingManagerTeamTasks);
 

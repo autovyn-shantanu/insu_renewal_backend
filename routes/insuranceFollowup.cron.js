@@ -11,13 +11,12 @@ const CRON_CONFIG = {
   SCHEDULE: "* * * * *", // Har 1 minute me chalega
   TIMEZONE: "Asia/Kolkata",
   CALL_DELAY_MS: 1500,
-  // SCH_TYPE: "insuranceremider",
 };
 
 // ============================================================
 // MAIN SCHEDULER ASYNC FUNCTION (All functions inside)
 // ============================================================
-async function runInsuranceFollowupScheduler(targetCompcode = null) { 
+async function runInsuranceFollowupScheduler(targetCompcode = null) {
   console.log("Running scheduled job for Insurance Followup Calling...");
 
   // ─────────────────────────────────────────────
@@ -101,7 +100,7 @@ async function runInsuranceFollowupScheduler(targetCompcode = null) {
       const [rows] = await sequelize1.query(
         `SELECT DISTINCT LTRIM(RTRIM(Dlr_Id)) AS Dlr_Id
          FROM DLR_SCH
-         WHERE SCH_TYPE IN ('${CRON_CONFIG.SCH_TYPE}', 'insuranceremider', 'insurancereminder')
+         WHERE SCH_TYPE = 'insuranceremider' 
            AND export_type < 3
            AND Dlr_Id IS NOT NULL
            AND LTRIM(RTRIM(Dlr_Id)) <> ''`
@@ -511,9 +510,9 @@ async function runInsuranceFollowupScheduler(targetCompcode = null) {
 // ─────────────────────────────────────────────
 // SINGLE DEALER RUN WRAPPER
 // ─────────────────────────────────────────────
-const processDealer = async (compcode) => {
-  return await runInsuranceFollowupScheduler(compcode);
-};
+// const processDealer = async (compcode) => {
+//   return await runInsuranceFollowupScheduler(compcode);
+// };
 
 // ─────────────────────────────────────────────
 // CRON SCHEDULE REGISTRATION
@@ -544,5 +543,5 @@ module.exports = {
   startInsuranceFollowupCron,
   runInsuranceFollowupScheduler,
   InsuranceFollowupScheduler: runInsuranceFollowupScheduler,
-  processDealer,
+
 };
