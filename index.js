@@ -6,6 +6,7 @@ const bodyParser = require("body-parser");
 const path = require("path");
 const filesystem = require("fs");
 const Crmrouter=require('./api/Crm')
+const hrrouter=require('./api/hr')
 
 const { authenticateUser } = require("./middleware/auth");
 const cors = require("cors");
@@ -112,6 +113,7 @@ app.use("/users", user);
 app.use("/demo-car-appointment", demoCarAppointment);
 app.use("/check-schedular",demoCarSchedular)
 app.use('/Crm',Crmrouter)
+app.use('/hr',hrrouter)
 app.use("/test-cron", require("./api/cronRunNow"));
 
 

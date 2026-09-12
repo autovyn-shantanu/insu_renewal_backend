@@ -4070,391 +4070,7 @@ exports.getAllApprovedInsuranceRenewals = async (req, res) => {
   }
 };
 
-// {BONVOICE}
-// exports.makeInsuranceRenewalCall = async function (req, res) {
-//   let sequelize;
-//   try {
-//     console.log("===== RENEWAL NEW CODE v2 (ONLY VEHICLE NUMBER) =====");
-//     sequelize = await dbname(req, req.headers.compcode);
 
-//     const { vehicle_number } = req.body || {};
-//     const cleanVeh = vehicle_number ? cleanVehicleNo(vehicle_number) : null;
-
-//     if (!cleanVeh) {
-//       return res.status(400).send({
-//         success: false,
-//         message: "vehicle_number is required",
-//       });
-//     }
-
-//     const dbInfo = await sequelize.query("SELECT DB_NAME() AS db", {
-//       type: QueryTypes.SELECT,
-//     });
-//     console.log(
-//       "[RENEWAL] DB:",
-//       dbInfo?.[0]?.db,
-//       "compcode:",
-//       req.headers.compcode
-//     );
-
-//     const sql = `
-//       SELECT TOP 1
-//         r.UTD,
-//         r.CUST_NAME,
-//         r.CUST_MOB_NO,
-//         r.POLICY_NAME,
-//         CAST(r.POLICY_NUMBER AS varchar(100)) AS POLICY_NUMBER,
-//         r.MODEL_NAME,
-//         CONVERT(varchar(10), r.POLICY_START_DATE, 23) AS POLICY_START_DATE,
-//         CONVERT(varchar(10), r.POLICY_END_DATE, 23)   AS POLICY_END_DATE,
-//         r.TRAN_ID,
-
-//         mst.UTD           AS MST_UTD,
-//         mst.VEHICAL_REG_NO,
-//         mst.LOC_CODE,
-//         mst.EXPORT_TYPE
-//       FROM dbo.INSU_RENEWAL r
-//       INNER JOIN dbo.INSU_RENEWAL_MST mst
-//         ON mst.UTD = r.TRAN_ID
-//       WHERE ISNULL(mst.EXPORT_TYPE, 0) = 1
-//         AND REPLACE(REPLACE(REPLACE(
-//               UPPER(LTRIM(RTRIM(ISNULL(mst.VEHICAL_REG_NO,'')))),
-//             ' ', ''), '-', ''), '/', '') = :cleanVeh
-//       ORDER BY r.UTD DESC
-//     `;
-
-//     const rows = await sequelize.query(sql, {
-//       replacements: { cleanVeh },
-//       type: QueryTypes.SELECT,
-//     });
-
-//     console.log("[RENEWAL] Query result count:", rows?.length);
-//     console.log("[RENEWAL] First row:", rows?.[0]);
-
-//     if (!rows.length) {
-//       return res.status(404).send({
-//         success: false,
-//         message: "Insurance renewal record not found for this vehicle_number",
-//         debug: { cleanVeh, db: dbInfo?.[0]?.db },
-//       });
-//     }
-
-//     const row = rows[0];
-
-//     const phoneNumber = normalizePhone(row.CUST_MOB_NO);
-//     if (!phoneNumber) {
-//       return res.status(400).send({
-//         success: false,
-//         message: "Customer mobile not found",
-//         debug: { UTD: row.UTD, CUST_NAME: row.CUST_NAME },
-//       });
-//     }
-
-//     const locCode = row.LOC_CODE != null ? Number(row.LOC_CODE) : null;
-
-//     const timeToAmPm = (hhmmss) => {
-//       if (!hhmmss) return null;
-//       const s = String(hhmmss).trim();
-//       const m = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
-//       if (!m) return s;
-//       let h = parseInt(m[1], 10);
-//       const min = m[2];
-//       const ampm = h >= 12 ? "PM" : "AM";
-//       h = h % 12;
-//       if (h === 0) h = 12;
-//       return `${h}:${min} ${ampm}`;
-//     };
-
-//     const toMDY = (d = new Date()) => {
-//       const mm = d.getMonth() + 1;
-//       const dd = d.getDate();
-//       const yyyy = d.getFullYear();
-//       return `${mm}/${dd}/${yyyy}`;
-//     };
-
-//     const cfgSQL =
-//       locCode == null
-//         ? `
-//       SELECT TOP 1
-//         C.UTD,
-//         C.INSU_COMPANY_NAME,
-//         C.SALES_EXECUTIVE_NO,
-//         C.SLOT1,
-//         C.SLOT2,
-//         C.SLOT3,
-//         C.CAMPAIGN_ID,
-//         CONVERT(varchar(8), C.CALLBACK_TIME) AS CALLBACK_TIME,
-//         C.LOC_CODE,
-//         C.STATUS
-//       FROM dbo.INSU_CALLING_CONFIG C
-//       WHERE C.LOC_CODE IS NULL
-//       ORDER BY C.UTD DESC
-//     `
-//         : `
-//       SELECT TOP 1
-//         C.UTD,
-//         C.INSU_COMPANY_NAME,
-//         C.SALES_EXECUTIVE_NO,
-//         C.SLOT1,
-//         C.SLOT2,
-//         C.SLOT3,
-//         C.CAMPAIGN_ID,
-//         CONVERT(varchar(8), C.CALLBACK_TIME) AS CALLBACK_TIME,
-//         C.LOC_CODE,
-//         C.STATUS
-//       FROM dbo.INSU_CALLING_CONFIG C
-//       WHERE (C.LOC_CODE = :locCode OR C.LOC_CODE IS NULL)
-//       ORDER BY
-//         CASE WHEN C.LOC_CODE = :locCode THEN 0 ELSE 1 END,
-//         C.UTD DESC
-//     `;
-
-//     const cfgRows = await sequelize.query(cfgSQL, {
-//       replacements: { locCode },
-//       type: QueryTypes.SELECT,
-//     });
-
-//     const cfg = cfgRows?.[0] || null;
-
-//     const resolvedVehicleModel = (() => {
-//       if (row.MODEL_NAME != null && String(row.MODEL_NAME).trim() !== "") {
-//         return String(row.MODEL_NAME).trim();
-//       }
-//       if (row.POLICY_NAME != null && String(row.POLICY_NAME).trim() !== "") {
-//         return String(row.POLICY_NAME).trim();
-//       }
-//       if (
-//         row.VEHICAL_REG_NO != null &&
-//         String(row.VEHICAL_REG_NO).trim() !== ""
-//       ) {
-//         return String(row.VEHICAL_REG_NO).trim();
-//       }
-//       return null;
-//     })();
-
-//     const variables = {
-//       showroom_name: cfg?.INSU_COMPANY_NAME ?? row.POLICY_NAME ?? null,
-//       vehicle_model: resolvedVehicleModel,
-//       vehicle_number:
-//         row.VEHICAL_REG_NO != null && String(row.VEHICAL_REG_NO).trim() !== ""
-//           ? String(row.VEHICAL_REG_NO).trim()
-//           : cleanVeh,
-//       insurance_expiry_date: formatDate(row.POLICY_END_DATE) || null,
-//       transferNumber:
-//         cfg?.SALES_EXECUTIVE_NO != null ? String(cfg.SALES_EXECUTIVE_NO) : null,
-//       callback_date: toMDY(new Date()),
-//       callback_time: timeToAmPm(cfg?.CALLBACK_TIME) ?? null,
-//       callee_name:
-//         row.CUST_NAME != null && String(row.CUST_NAME).trim() !== ""
-//           ? String(row.CUST_NAME).trim()
-//           : null,
-//     };
-
-//     const promptNameRaw = cfg?.CAMPAIGN_ID || null;
-//     const availablePrompts = ["default", "service", "Insurance"];
-
-//     const bonvoicePromptName = availablePrompts.includes(promptNameRaw)
-//       ? promptNameRaw
-//       : "Insurance";
-
-//     const missing = [];
-//     if (!variables.showroom_name)
-//       missing.push(
-//         "showroom_name (POLICY_NAME/INSU_CALLING_CONFIG.INSU_COMPANY_NAME)"
-//       );
-//     if (!variables.insurance_expiry_date)
-//       missing.push("insurance_expiry_date (POLICY_END_DATE)");
-//     if (!variables.transferNumber)
-//       missing.push("transferNumber (INSU_CALLING_CONFIG.SALES_EXECUTIVE_NO)");
-//     if (!variables.callback_time)
-//       missing.push("callback_time (INSU_CALLING_CONFIG.CALLBACK_TIME)");
-//     if (!variables.callee_name) missing.push("callee_name (CUST_NAME)");
-//     if (!bonvoicePromptName)
-//       missing.push("promptName (INSU_CALLING_CONFIG.CAMPAIGN_ID)");
-
-//     if (missing.length) {
-//       return res.status(400).send({
-//         success: false,
-//         message:
-//           "Dynamic values missing. Please configure INSU_CALLING_CONFIG for this LOC_CODE (or global LOC_CODE NULL).",
-//         missingFields: missing,
-//         debug: {
-//           vehicle_number,
-//           cleanVeh,
-//           locCode,
-//           foundConfig: !!cfg,
-//           cfgUTD: cfg?.UTD || null,
-//           resolvedVehicleModel,
-//           rawModelName: row.MODEL_NAME,
-//           promptNameRaw,
-//           bonvoicePromptName,
-//         },
-//       });
-//     }
-
-//     console.log("[RENEWAL] Variables prepared:", {
-//       ...variables,
-//       transferNumber: variables.transferNumber
-//         ? "****" + String(variables.transferNumber).slice(-4)
-//         : null,
-//     });
-
-//     const bonvoiceProgram = "INSURANCE_RENEWAL";
-
-//     // ✅ CALL BONVOICE (UPDATED: 2-step so callId mil jaye)
-//     const leadPayload = {
-//       name: variables.callee_name,
-//       phone: phoneNumber,
-//       email: null,
-//       company: variables.showroom_name,
-//       program: bonvoiceProgram,
-
-//       column1: String(row.MST_UTD),
-//       column2: variables.vehicle_number,
-//       column3: variables.insurance_expiry_date,
-//       column7: variables.transferNumber
-//     };
-
-//     const callOptions = {
-//       promptName: bonvoicePromptName,
-//       program: bonvoiceProgram,
-//     };
-
-//     // NOTE: createLeadThenTriggerCall ko aapke bonvoice helper se import hona chahiye
-//     // const { createLeadThenTriggerCall } = require("...");
-
-//     const callResult = await createLeadThenTriggerCall(leadPayload, callOptions);
-
-//     const bonvoiceLeadId = callResult?.leadId || null;
-//     const callId = callResult?.callId || null;
-//     const calledPhone = phoneNumber;
-
-//     console.log("[RENEWAL] Bonvoice call triggered:", {
-//       leadId: bonvoiceLeadId,
-//       callId: callId,
-//       phone: calledPhone,
-//     });
-
-//     // ✅ Save leadId in FOLLOWUP_DETAILS for webhook reference
-//     if (bonvoiceLeadId) {
-//       try {
-//         await sequelize.query(
-//           `INSERT INTO dbo.FOLLOWUP_DETAILS
-//            (TRAN_ID, bonvoice_lead_id, FOLLOWUP_STATUS, FOLLOWUP_DATE, CREATED_AT)
-//            VALUES (:tranId, :leadId, 'AI_CALL_INITIATED', GETDATE(), GETDATE())`,
-//           {
-//             replacements: {
-//               tranId: row.MST_UTD,
-//               leadId: bonvoiceLeadId,
-//             },
-//             type: QueryTypes.INSERT,
-//           }
-//         );
-//         console.log("[RENEWAL] Bonvoice leadId saved:", bonvoiceLeadId);
-//       } catch (fuErr) {
-//         console.warn("[RENEWAL] leadId save failed:", fuErr?.message);
-//       }
-//     }
-
-//     // ✅ NEW: Save callId ↔ leadId mapping for webhook enrichment
-//     if (callId) {
-//       try {
-//         const mergeMapSql = `
-//           MERGE dbo.call_webhook_dtl AS T
-//           USING (SELECT :call_id AS call_id) AS S
-//           ON T.call_id = S.call_id
-//           WHEN MATCHED THEN
-//             UPDATE SET
-//               lead_id      = ISNULL(:lead_id, T.lead_id),
-//               phone_number = ISNULL(:phone_number, T.phone_number),
-//               callee_name  = ISNULL(:callee_name, T.callee_name),
-//               campaign_id  = ISNULL(:campaign_id, T.campaign_id)
-//           WHEN NOT MATCHED THEN
-//             INSERT (call_id, lead_id, phone_number, callee_name, campaign_id, created_at)
-//             VALUES (:call_id, :lead_id, :phone_number, :callee_name, :campaign_id, GETDATE());
-//         `;
-
-//         await sequelize.query(mergeMapSql, {
-//           replacements: {
-//             call_id: String(callId).trim(),
-//             lead_id: bonvoiceLeadId ? String(bonvoiceLeadId).trim() : null,
-//             phone_number: String(calledPhone).substring(0, 15),
-//             callee_name: variables.callee_name
-//               ? String(variables.callee_name).substring(0, 100)
-//               : null,
-//             campaign_id: bonvoicePromptName
-//               ? String(bonvoicePromptName).substring(0, 100)
-//               : null,
-//           },
-//           type: QueryTypes.RAW,
-//         });
-
-//         console.log("[RENEWAL] call_webhook_dtl mapping saved:", {
-//           callId,
-//           bonvoiceLeadId,
-//         });
-//       } catch (mapErr) {
-//         console.warn(
-//           "[RENEWAL] call_webhook_dtl mapping save failed:",
-//           mapErr?.message
-//         );
-//       }
-
-//       // existing call log
-//       try {
-//         await sequelize.query(
-//           `INSERT INTO dbo.call_Id_dtl (mob_no, call_id, call_type)
-//            VALUES (:mob_no, :call_id, 'INSURANCE_RENEWAL')`,
-//           {
-//             replacements: { mob_no: calledPhone, call_id: callId },
-//             type: QueryTypes.INSERT,
-//           }
-//         );
-//       } catch (logErr) {
-//         console.error("[RENEWAL] Call log save failed:", logErr?.message);
-//       }
-//     }
-
-//     return res.status(200).send({
-//       success: true,
-//       message: "Insurance Renewal AI Call Triggered Successfully",
-//       data: callResult,
-//       variables,
-//       bonvoice: {
-//         leadId: bonvoiceLeadId,
-//         callId: callId,
-//         callStatus: callResult?.call?.callStatus || callResult?.callStatus || null,
-//         promptName: bonvoicePromptName,
-//         program: bonvoiceProgram,
-//       },
-//       renewal: {
-//         UTD: row.UTD,
-//         TRAN_ID: row.TRAN_ID,
-//         MST_UTD: row.MST_UTD,
-//         LOC_CODE: row.LOC_CODE,
-//         CUST_NAME: row.CUST_NAME,
-//         VEHICAL_REG_NO: row.VEHICAL_REG_NO,
-//         POLICY_NUMBER: row.POLICY_NUMBER,
-//         POLICY_END_DATE: row.POLICY_END_DATE,
-//         callId: callId || null,
-//         MODEL_NAME_SOURCE: row.MODEL_NAME ? "DB" : "FALLBACK",
-//       },
-//     });
-//   } catch (err) {
-//     console.error("[RENEWAL] ERROR:", err);
-//     return res.status(500).send({
-//       success: false,
-//       message: err?.message || "Server error",
-//       debug: err?.data || null,
-//     });
-//   } finally {
-//     if (sequelize) {
-//       try {
-//         await sequelize.close();
-//       } catch (_) {}
-//     }
-//   }
-// };
 
 exports.bonvoiceWebhook = async function bonvoiceWebhook(req, res) {
   let sequelize;
@@ -4618,10 +4234,14 @@ exports.bonvoiceWebhook = async function bonvoiceWebhook(req, res) {
       // 1) Get lead_id from your DB mapping table (call_webhook_dtl)
       const { QueryTypes } = require("sequelize");
       const mapRows = await sequelize.query(
-        `SELECT TOP 1 phone_number, callee_name, campaign_id
-         FROM dbo.call_webhook_dtl
-         WHERE call_id = :callId
-         ORDER BY created_at DESC`,
+      `SELECT TOP 1
+    lead_id,
+    phone_number,
+    callee_name,
+    campaign_id
+FROM dbo.call_webhook_dtl
+WHERE call_id = :callId
+ORDER BY created_at DESC`,
         {
           replacements: { callId: String(callId).trim() },
           type: QueryTypes.SELECT,
@@ -5338,6 +4958,523 @@ const saveCallWebhookDetails = async (sequelize, callId, data = {}) => {
 exports.saveCallWebhookDetails = saveCallWebhookDetails;
 
 // {CALLMATICS}
+// exports.makeInsuranceRenewalCall = async function (req, res) {
+//   let sequelize;
+//   try {
+//     console.log("===== RENEWAL NEW CODE v2 (ONLY VEHICLE NUMBER) =====");
+//     sequelize = await dbname(req, req.headers.compcode);
+
+//     const { vehicle_number } = req.body || {};
+
+//     const cleanVeh = vehicle_number ? cleanVehicleNo(vehicle_number) : null;
+
+//     if (!cleanVeh) {
+//       return res.status(400).send({
+//         success: false,
+//         message: "vehicle_number is required",
+//       });
+//     }
+
+//     const dbInfo = await sequelize.query("SELECT DB_NAME() AS db", {
+//       type: QueryTypes.SELECT,
+//     });
+//     console.log(
+//       "[RENEWAL] DB:",
+//       dbInfo?.[0]?.db,
+//       "compcode:",
+//       req.headers.compcode,
+//     );
+
+//     const sql = `
+//       SELECT TOP 1
+//         r.UTD,
+//         r.CUST_NAME,
+//         r.CUST_MOB_NO,
+//         r.POLICY_NAME,
+//         CAST(r.POLICY_NUMBER AS varchar(100)) AS POLICY_NUMBER,
+//         r.MODEL_NAME,
+//         r.DSC_MOB_NO,
+//         CONVERT(varchar(10), r.POLICY_START_DATE, 23) AS POLICY_START_DATE,
+//         CONVERT(varchar(10), r.POLICY_END_DATE, 23)   AS POLICY_END_DATE,
+//         r.TRAN_ID,
+
+//         mst.UTD           AS MST_UTD,
+//         mst.VEHICAL_REG_NO,
+//         mst.LOC_CODE,
+//         mst.EXPORT_TYPE
+//       FROM dbo.INSU_RENEWAL r
+//       INNER JOIN dbo.INSU_RENEWAL_MST mst
+//         ON mst.UTD = r.TRAN_ID
+//       WHERE ISNULL(mst.EXPORT_TYPE, 0) = 1
+//         AND REPLACE(REPLACE(REPLACE(
+//               UPPER(LTRIM(RTRIM(ISNULL(mst.VEHICAL_REG_NO,'')))),
+//             ' ', ''), '-', ''), '/', '') = :cleanVeh
+//       ORDER BY r.UTD DESC
+//     `;
+
+//     const rows = await sequelize.query(sql, {
+//       replacements: { cleanVeh },
+//       type: QueryTypes.SELECT,
+//     });
+
+//     console.log("[RENEWAL] Query result count:", rows?.length);
+//     console.log("[RENEWAL] First row:", rows?.[0]);
+
+//     if (!rows.length) {
+//       return res.status(404).send({
+//         success: false,
+//         message: "Insurance renewal record not found for this vehicle_number",
+//         debug: { cleanVeh, db: dbInfo?.[0]?.db },
+//       });
+//     }
+
+//     const row = rows[0];
+
+//     const phoneNumber = normalizePhone(row.CUST_MOB_NO);
+//     if (!phoneNumber) {
+//       return res.status(400).send({
+//         success: false,
+//         message: "Customer mobile not found",
+//         debug: { UTD: row.UTD, CUST_NAME: row.CUST_NAME },
+//       });
+//     }
+
+//     const locCode = row.LOC_CODE != null ? Number(row.LOC_CODE) : null;
+
+//     const timeToAmPm = (hhmmss) => {
+//       if (!hhmmss) return null;
+//       const s = String(hhmmss).trim();
+//       const m = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+//       if (!m) return s;
+//       let h = parseInt(m[1], 10);
+//       const min = m[2];
+//       const ampm = h >= 12 ? "PM" : "AM";
+//       h = h % 12;
+//       if (h === 0) h = 12;
+//       return `${h}:${min} ${ampm}`;
+//     };
+
+//     const toMDY = (d = new Date()) => {
+//       const mm = d.getMonth() + 1;
+//       const dd = d.getDate();
+//       const yyyy = d.getFullYear();
+//       return `${mm}/${dd}/${yyyy}`;
+//     };
+
+//     const cfgSQL = `
+//       SELECT TOP 1
+//         C.UTD,
+//         C.INSU_COMPANY_NAME,
+//         C.SALES_EXECUTIVE_NO,
+//         C.SLOT1,
+//         C.SLOT2,
+//         C.SLOT3,
+//         C.CAMPAIGN_ID,
+//         CONVERT(varchar(8), C.CALLBACK_TIME) AS CALLBACK_TIME,
+//         C.LOC_CODE,
+//         C.STATUS
+//       FROM dbo.INSU_CALLING_CONFIG C
+//       WHERE (C.LOC_CODE = :locCode OR C.LOC_CODE IS NULL)
+//       ORDER BY
+//         CASE WHEN C.LOC_CODE = :locCode THEN 0 ELSE 1 END,
+//         C.UTD DESC
+//     `;
+
+//     const cfgRows = await sequelize.query(cfgSQL, {
+//       replacements: { locCode },
+//       type: QueryTypes.SELECT,
+//     });
+
+//     const cfg = cfgRows?.[0] || null;
+
+//     // =========================================================
+//     // ✅ vehicle_model: use MODEL_NAME if available,
+//     //    else use POLICY_NAME, else use vehicle_number as fallback
+//     // =========================================================
+//     const resolvedVehicleModel = (() => {
+//       if (row.MODEL_NAME != null && String(row.MODEL_NAME).trim() !== "") {
+//         return String(row.MODEL_NAME).trim();
+//       }
+//       // fallback 1: try POLICY_NAME
+//       if (row.POLICY_NAME != null && String(row.POLICY_NAME).trim() !== "") {
+//         return String(row.POLICY_NAME).trim();
+//       }
+//       // fallback 2: use vehicle number itself
+//       if (
+//         row.VEHICAL_REG_NO != null &&
+//         String(row.VEHICAL_REG_NO).trim() !== ""
+//       ) {
+//         return String(row.VEHICAL_REG_NO).trim();
+//       }
+//       return null;
+//     })();
+
+//     // =========================================================
+//     // ✅ transferNumber: First check DSC_NO from INSU_RENEWAL,
+//     //    then fallback to SALES_EXECUTIVE_NO from config
+//     // =========================================================
+//     const resolvedTransferNumber = (() => {
+//       if (row.DSC_MOB_NO != null && String(row.DSC_NO).trim() !== "") {
+//         return String(row.DSC_MOB_NO).trim();
+//       }
+//       // fallback: try config SALES_EXECUTIVE_NO
+//       if (cfg?.SALES_EXECUTIVE_NO != null) {
+//         return String(cfg.SALES_EXECUTIVE_NO);
+//       }
+//       return null;
+//     })();
+
+//     const variables = {
+//       showroom_name: row.POLICY_NAME ?? cfg?.INSU_COMPANY_NAME ?? null,
+//       // ✅ Now uses fallback logic instead of null
+//       vehicle_model: resolvedVehicleModel,
+//       vehicle_number:
+//         row.VEHICAL_REG_NO != null && String(row.VEHICAL_REG_NO).trim() !== ""
+//           ? String(row.VEHICAL_REG_NO).trim()
+//           : cleanVeh, // fallback to input if DB empty
+//       insurance_expiry_date: formatDate(row.POLICY_END_DATE) || null,
+//       transferNumber: resolvedTransferNumber,
+//       callback_date: toMDY(new Date()),
+//       callback_time: timeToAmPm(cfg?.CALLBACK_TIME) ?? null,
+//       callee_name:
+//         row.CUST_NAME != null && String(row.CUST_NAME).trim() !== ""
+//           ? String(row.CUST_NAME).trim()
+//           : null,
+//     };
+
+//     const finalCampaignId = cfg?.CAMPAIGN_ID || null;
+
+//     // =========================================================
+//     // ✅ vehicle_model is NOT in missing check (has fallback)
+//     // ✅ vehicle_number is NOT in missing check (has fallback)
+//     // =========================================================
+//     const missing = [];
+//     if (!variables.showroom_name)
+//       missing.push(
+//         "showroom_name (POLICY_NAME/INSU_CALLING_CONFIG.INSU_COMPANY_NAME)",
+//       );
+//     if (!variables.insurance_expiry_date)
+//       missing.push("insurance_expiry_date (POLICY_END_DATE)");
+//     if (!variables.transferNumber)
+//       missing.push(
+//         "transferNumber (INSU_RENEWAL.DSC_NO/INSU_CALLING_CONFIG.SALES_EXECUTIVE_NO)",
+//       );
+//     if (!variables.callback_time)
+//       missing.push("callback_time (INSU_CALLING_CONFIG.CALLBACK_TIME)");
+//     if (!variables.callee_name) missing.push("callee_name (CUST_NAME)");
+//     if (!finalCampaignId)
+//       missing.push("campaign_id (INSU_CALLING_CONFIG.CAMPAIGN_ID)");
+
+//     if (missing.length) {
+//       return res.status(400).send({
+//         success: false,
+//         message:
+//           "Dynamic values missing. Please configure INSU_CALLING_CONFIG for this LOC_CODE (or global LOC_CODE NULL).",
+//         missingFields: missing,
+//         debug: {
+//           vehicle_number,
+//           cleanVeh,
+//           locCode,
+//           foundConfig: !!cfg,
+//           cfgUTD: cfg?.UTD || null,
+//           // ✅ Show what model was resolved to help debug
+//           resolvedVehicleModel,
+//           rawModelName: row.MODEL_NAME,
+//           // ✅ Show what transfer number was resolved
+//           resolvedTransferNumber,
+//           rawDscNo: row.DSC_NO,
+//           rawSalesExecNo: cfg?.SALES_EXECUTIVE_NO || null,
+//         },
+//       });
+//     }
+
+//     console.log("[RENEWAL] Variables prepared:", {
+//       ...variables,
+//       // mask phone for log
+//       transferNumber: variables.transferNumber
+//         ? "****" + String(variables.transferNumber).slice(-4)
+//         : null,
+//     });
+
+//     // Call trigger
+//     const callResult = await triggerSingleCall(
+//       phoneNumber,
+//       variables,
+//       finalCampaignId,
+//     );
+
+//     const callId = callResult?.callId || callResult?.calls?.[0]?.callId;
+//     const calledPhone =
+//       callResult?.phoneNumber ||
+//       callResult?.calls?.[0]?.phoneNumber ||
+//       phoneNumber;
+
+//     // Save call log
+//     if (callId) {
+//       try {
+//         // 1) Save to call_Id_dtl
+//         await sequelize.query(
+//           `INSERT INTO dbo.call_Id_dtl (mob_no, call_id, call_type)
+//            VALUES (:mob_no, :call_id, 'INSURANCE_RENEWAL')`,
+//           {
+//             replacements: { mob_no: calledPhone, call_id: callId },
+//             type: QueryTypes.INSERT,
+//           },
+//         );
+
+//         // 2) Initial save to call_webhook_dtl
+//         await saveCallWebhookDetails(sequelize, callId, {
+//           campaignId: finalCampaignId,
+//           phoneNumber: calledPhone,
+//           calleeName: variables.callee_name || null,
+//           status: 'INITIATED',
+//           direction: 'outbound',
+//           triggeredAt: new Date(),
+//           startTime: new Date(),
+//           category: 'INSURANCE_RENEWAL',
+//         });
+
+//         // 3) Save to FOLLOWUP_DETAILS so it links with calling history
+//         const mstUtd = row.MST_UTD || row.TRAN_ID;
+//         const expType = row.EXPORT_TYPE != null ? Number(row.EXPORT_TYPE) : 1;
+
+//         if (mstUtd) {
+//           await sequelize.query(
+//             `INSERT INTO dbo.FOLLOWUP_DETAILS (
+//               TRAN_ID,
+//               EXPORT_TYPE,
+//               FOLLOWUP_STATUS,
+//               FOLLOWUP_DATE,
+//               FOLLOWUP_TIME,
+//               LAST_FOLLOWUP_DATE,
+//               REMARKS,
+//               CALL_ID
+//              ) VALUES (
+//               :tranId,
+//               :exportType,
+//               'AI_CALL_INITIATED',
+//               CAST(GETDATE() AS date),
+//               CAST(GETDATE() AS time),
+//               CAST(GETDATE() AS date),
+//               'AI Call triggered manually',
+//               :callId
+//              )`,
+//             {
+//               replacements: {
+//                 tranId: mstUtd,
+//                 exportType: expType,
+//                 callId: String(callId),
+//               },
+//               type: QueryTypes.INSERT,
+//             },
+//           );
+//           console.log("[RENEWAL] Saved callId to FOLLOWUP_DETAILS:", callId);
+//         }
+//       } catch (logErr) {
+//         console.error("[RENEWAL] Call log or followup save failed:", logErr?.message);
+//       }
+//     }
+
+//     // =========================================================
+//     // ✅ AUTO WHATSAPP: Call trigger ke baad wait kro, call complete
+//     //    ho jae tb hi WhatsApp message bhejo
+//     // =========================================================
+//     setImmediate(async () => {
+//       let bgSeq;
+//       try {
+//         console.log("[RENEWAL] WhatsApp & status sync process started in background");
+//         bgSeq = await dbname(req, req.headers.compcode);
+
+//         // ✅ Call ke status check kro - complete/ended/finished ho gaya ya nahi
+//         const checkCallStatus = async (cId, maxAttempts = 60) => {
+//           let attempts = 0;
+
+//           while (attempts < maxAttempts) {
+//             try {
+//               // API se call status check kro
+//               const statusResult = await getCallStatus1(cId);
+
+//               console.log(`[RENEWAL] Call Status Check (Attempt ${attempts + 1}/${maxAttempts}):`, {
+//                 callId: cId,
+//                 status: statusResult?.status,
+//                 duration: statusResult?.duration,
+//               });
+
+//               if (statusResult && bgSeq) {
+//                 await saveCallWebhookDetails(bgSeq, cId, {
+//                   ...statusResult,
+//                   phoneNumber: calledPhone,
+//                   calleeName: variables.callee_name || null,
+//                   campaignId: finalCampaignId,
+//                 });
+//               }
+
+//               const st = String(statusResult?.status || '').toUpperCase();
+
+//               // ✅ Call complete/ended/finished ho gaya to return kro
+//               if (['COMPLETED', 'ENDED', 'FINISHED', 'FAILED', 'BUSY', 'NO_ANSWER', 'CANCELED'].includes(st)) {
+//                 console.log("[RENEWAL] ✅ Call Status:", statusResult?.status, "- Checking summary & Proceeding");
+
+//                 // Agar call complete hui par summary nahi aayi, 1-2 brief retries karo taaki Callmatic summary process kar sake
+//                 if (['COMPLETED', 'ENDED', 'FINISHED'].includes(st) && !statusResult?.summary) {
+//                   for (let sAttempt = 1; sAttempt <= 3; sAttempt++) {
+//                     await new Promise(resolve => setTimeout(resolve, 3000));
+//                     try {
+//                       const retryRes = await getCallStatus1(cId);
+//                       if (retryRes && bgSeq) {
+//                         await saveCallWebhookDetails(bgSeq, cId, {
+//                           ...retryRes,
+//                           phoneNumber: calledPhone,
+//                           calleeName: variables.callee_name || null,
+//                           campaignId: finalCampaignId,
+//                         });
+//                       }
+//                       if (retryRes?.summary || retryRes?.analysis?.summary || retryRes?.call_analysis?.summary) {
+//                         console.log(`[RENEWAL] ✅ Summary received on retry attempt ${sAttempt}`);
+//                         break;
+//                       }
+//                     } catch (e) {
+//                       // ignore retry error
+//                     }
+//                   }
+//                 }
+
+//                 return {
+//                   success: true,
+//                   status: statusResult?.status,
+//                   duration: statusResult?.duration,
+//                 };
+//               }
+
+//               // Agar call still ringing/active hai to wait kro
+//               if (['RINGING', 'ACTIVE', 'IN_PROGRESS', 'INITIATED', 'QUEUED'].includes(st)) {
+//                 console.log(`[RENEWAL] Call still ${statusResult?.status}... waiting...`);
+//               }
+
+//               // 2 second wait kro phir se check kro
+//               await new Promise(resolve => setTimeout(resolve, 2000));
+//               attempts++;
+//             } catch (checkErr) {
+//               console.error(`[RENEWAL] Status check error (Attempt ${attempts + 1}):`, checkErr?.message);
+//               attempts++;
+//               // Error aaye to 2 second wait kro
+//               await new Promise(resolve => setTimeout(resolve, 2000));
+//             }
+//           }
+
+//           // Max attempts ho gaye
+//           console.log("[RENEWAL] ⚠️ Max status check attempts reached (120 seconds timeout)");
+//           return {
+//             success: false,
+//             status: 'TIMEOUT',
+//             message: 'Call status check timeout - WhatsApp abhi bhejenge'
+//           };
+//         };
+
+//         // ✅ WAIT FOR CALL TO COMPLETE
+//         console.log("[RENEWAL] Waiting for call to complete...");
+//         if (callId) {
+//           const callStatusResult = await checkCallStatus(callId);
+
+//           console.log("[RENEWAL] Call Status Result:", {
+//             success: callStatusResult?.success,
+//             status: callStatusResult?.status,
+//             message: callStatusResult?.message,
+//           });
+
+//           // ✅ Agar call complete nahi hua to wait kro additional 5 seconds
+//           if (!callStatusResult?.success) {
+//             console.log("[RENEWAL] Waiting additional 5 seconds before sending WhatsApp...");
+//             await new Promise(resolve => setTimeout(resolve, 5000));
+//           }
+//         }
+
+//         // ✅ NOW SEND WHATSAPP (jab call complete ho gaya)
+//         console.log("[RENEWAL] 🔔 Calling SendInsuranceRenewalWhatsAppToCustomer...");
+
+//         const compcode = req.headers.compcode;
+//         const mstUtd = row.MST_UTD;
+
+//         const reqObj = {
+//           headers: { compcode },
+//           body: { tranIds: [Number(mstUtd)] },
+//         };
+
+//         let waResult;
+//         const resObj = {
+//           status: (code) => ({
+//             send: (data) => {
+//               waResult = { statusCode: code, data };
+//               return waResult;
+//             },
+//             json: (data) => {
+//               waResult = { statusCode: code, data };
+//               return waResult;
+//             },
+//           }),
+//         };
+
+//         await exports.SendInsuranceRenewalWhatsAppToCustomer(reqObj, resObj);
+
+//         console.log("[RENEWAL] ✅ Auto-WhatsApp completed via SendInsuranceRenewalWhatsAppToCustomer:", {
+//           compcode,
+//           mstUtd,
+//           callId: callId || null,
+//           waResult,
+//           timestamp: new Date().toISOString(),
+//         });
+
+//       } catch (waErr) {
+//         console.error("[RENEWAL] ❌ Auto-WhatsApp failed:", {
+//           error: waErr?.message || waErr,
+//           code: waErr?.code,
+//           timestamp: new Date().toISOString(),
+//         });
+//       } finally {
+//         if (bgSeq) {
+//           try {
+//             await bgSeq.close();
+//           } catch (_) { }
+//         }
+//       }
+//     });
+
+//     return res.status(200).send({
+//       success: true,
+//       message: "Insurance Renewal AI Call Triggered Successfully",
+//       data: callResult,
+//       variables,
+//       renewal: {
+//         UTD: row.UTD,
+//         TRAN_ID: row.TRAN_ID,
+//         MST_UTD: row.MST_UTD,
+//         LOC_CODE: row.LOC_CODE,
+//         CUST_NAME: row.CUST_NAME,
+//         VEHICAL_REG_NO: row.VEHICAL_REG_NO,
+//         POLICY_NUMBER: row.POLICY_NUMBER,
+//         POLICY_END_DATE: row.POLICY_END_DATE,
+//         callId: callId || null,
+//         // ✅ Show model source for transparency
+//         MODEL_NAME_SOURCE: row.MODEL_NAME ? "DB" : "FALLBACK",
+//         // ✅ Show transfer number source for transparency
+//         TRANSFER_NUMBER_SOURCE: row.DSC_NO ? "DSC_NO" : "SALES_EXECUTIVE_NO",
+//       },
+//     });
+//   } catch (err) {
+//     console.error("[RENEWAL] ERROR:", err);
+//     return res.status(500).send({
+//       success: false,
+//       message: err?.message || "Server error",
+//     });
+//   } finally {
+//     if (sequelize) {
+//       try {
+//         await sequelize.close();
+//       } catch (_) { }
+//     }
+//   }
+// };
+// {BONVOICE}
 exports.makeInsuranceRenewalCall = async function (req, res) {
   let sequelize;
   try {
@@ -5345,7 +5482,6 @@ exports.makeInsuranceRenewalCall = async function (req, res) {
     sequelize = await dbname(req, req.headers.compcode);
 
     const { vehicle_number } = req.body || {};
-
     const cleanVeh = vehicle_number ? cleanVehicleNo(vehicle_number) : null;
 
     if (!cleanVeh) {
@@ -5362,7 +5498,7 @@ exports.makeInsuranceRenewalCall = async function (req, res) {
       "[RENEWAL] DB:",
       dbInfo?.[0]?.db,
       "compcode:",
-      req.headers.compcode,
+      req.headers.compcode
     );
 
     const sql = `
@@ -5373,7 +5509,6 @@ exports.makeInsuranceRenewalCall = async function (req, res) {
         r.POLICY_NAME,
         CAST(r.POLICY_NUMBER AS varchar(100)) AS POLICY_NUMBER,
         r.MODEL_NAME,
-        r.DSC_MOB_NO,
         CONVERT(varchar(10), r.POLICY_START_DATE, 23) AS POLICY_START_DATE,
         CONVERT(varchar(10), r.POLICY_END_DATE, 23)   AS POLICY_END_DATE,
         r.TRAN_ID,
@@ -5441,7 +5576,25 @@ exports.makeInsuranceRenewalCall = async function (req, res) {
       return `${mm}/${dd}/${yyyy}`;
     };
 
-    const cfgSQL = `
+    const cfgSQL =
+      locCode == null
+        ? `
+      SELECT TOP 1
+        C.UTD,
+        C.INSU_COMPANY_NAME,
+        C.SALES_EXECUTIVE_NO,
+        C.SLOT1,
+        C.SLOT2,
+        C.SLOT3,
+        C.CAMPAIGN_ID,
+        CONVERT(varchar(8), C.CALLBACK_TIME) AS CALLBACK_TIME,
+        C.LOC_CODE,
+        C.STATUS
+      FROM dbo.INSU_CALLING_CONFIG C
+      WHERE C.LOC_CODE IS NULL
+      ORDER BY C.UTD DESC
+    `
+        : `
       SELECT TOP 1
         C.UTD,
         C.INSU_COMPANY_NAME,
@@ -5467,19 +5620,13 @@ exports.makeInsuranceRenewalCall = async function (req, res) {
 
     const cfg = cfgRows?.[0] || null;
 
-    // =========================================================
-    // ✅ vehicle_model: use MODEL_NAME if available,
-    //    else use POLICY_NAME, else use vehicle_number as fallback
-    // =========================================================
     const resolvedVehicleModel = (() => {
       if (row.MODEL_NAME != null && String(row.MODEL_NAME).trim() !== "") {
         return String(row.MODEL_NAME).trim();
       }
-      // fallback 1: try POLICY_NAME
       if (row.POLICY_NAME != null && String(row.POLICY_NAME).trim() !== "") {
         return String(row.POLICY_NAME).trim();
       }
-      // fallback 2: use vehicle number itself
       if (
         row.VEHICAL_REG_NO != null &&
         String(row.VEHICAL_REG_NO).trim() !== ""
@@ -5489,31 +5636,16 @@ exports.makeInsuranceRenewalCall = async function (req, res) {
       return null;
     })();
 
-    // =========================================================
-    // ✅ transferNumber: First check DSC_NO from INSU_RENEWAL,
-    //    then fallback to SALES_EXECUTIVE_NO from config
-    // =========================================================
-    const resolvedTransferNumber = (() => {
-      if (row.DSC_MOB_NO != null && String(row.DSC_NO).trim() !== "") {
-        return String(row.DSC_MOB_NO).trim();
-      }
-      // fallback: try config SALES_EXECUTIVE_NO
-      if (cfg?.SALES_EXECUTIVE_NO != null) {
-        return String(cfg.SALES_EXECUTIVE_NO);
-      }
-      return null;
-    })();
-
     const variables = {
-      showroom_name: row.POLICY_NAME ?? cfg?.INSU_COMPANY_NAME ?? null,
-      // ✅ Now uses fallback logic instead of null
+      showroom_name: cfg?.INSU_COMPANY_NAME ?? row.POLICY_NAME ?? null,
       vehicle_model: resolvedVehicleModel,
       vehicle_number:
         row.VEHICAL_REG_NO != null && String(row.VEHICAL_REG_NO).trim() !== ""
           ? String(row.VEHICAL_REG_NO).trim()
-          : cleanVeh, // fallback to input if DB empty
+          : cleanVeh,
       insurance_expiry_date: formatDate(row.POLICY_END_DATE) || null,
-      transferNumber: resolvedTransferNumber,
+      transferNumber:
+        cfg?.SALES_EXECUTIVE_NO != null ? String(cfg.SALES_EXECUTIVE_NO) : null,
       callback_date: toMDY(new Date()),
       callback_time: timeToAmPm(cfg?.CALLBACK_TIME) ?? null,
       callee_name:
@@ -5522,28 +5654,27 @@ exports.makeInsuranceRenewalCall = async function (req, res) {
           : null,
     };
 
-    const finalCampaignId = cfg?.CAMPAIGN_ID || null;
+    const promptNameRaw = cfg?.CAMPAIGN_ID || null;
+    const availablePrompts = ["default", "service", "Insurance"];
 
-    // =========================================================
-    // ✅ vehicle_model is NOT in missing check (has fallback)
-    // ✅ vehicle_number is NOT in missing check (has fallback)
-    // =========================================================
+    const bonvoicePromptName = availablePrompts.includes(promptNameRaw)
+      ? promptNameRaw
+      : "Insurance";
+
     const missing = [];
     if (!variables.showroom_name)
       missing.push(
-        "showroom_name (POLICY_NAME/INSU_CALLING_CONFIG.INSU_COMPANY_NAME)",
+        "showroom_name (POLICY_NAME/INSU_CALLING_CONFIG.INSU_COMPANY_NAME)"
       );
     if (!variables.insurance_expiry_date)
       missing.push("insurance_expiry_date (POLICY_END_DATE)");
     if (!variables.transferNumber)
-      missing.push(
-        "transferNumber (INSU_RENEWAL.DSC_NO/INSU_CALLING_CONFIG.SALES_EXECUTIVE_NO)",
-      );
+      missing.push("transferNumber (INSU_CALLING_CONFIG.SALES_EXECUTIVE_NO)");
     if (!variables.callback_time)
       missing.push("callback_time (INSU_CALLING_CONFIG.CALLBACK_TIME)");
     if (!variables.callee_name) missing.push("callee_name (CUST_NAME)");
-    if (!finalCampaignId)
-      missing.push("campaign_id (INSU_CALLING_CONFIG.CAMPAIGN_ID)");
+    if (!bonvoicePromptName)
+      missing.push("promptName (INSU_CALLING_CONFIG.CAMPAIGN_ID)");
 
     if (missing.length) {
       return res.status(400).send({
@@ -5557,273 +5688,149 @@ exports.makeInsuranceRenewalCall = async function (req, res) {
           locCode,
           foundConfig: !!cfg,
           cfgUTD: cfg?.UTD || null,
-          // ✅ Show what model was resolved to help debug
           resolvedVehicleModel,
           rawModelName: row.MODEL_NAME,
-          // ✅ Show what transfer number was resolved
-          resolvedTransferNumber,
-          rawDscNo: row.DSC_NO,
-          rawSalesExecNo: cfg?.SALES_EXECUTIVE_NO || null,
+          promptNameRaw,
+          bonvoicePromptName,
         },
       });
     }
 
     console.log("[RENEWAL] Variables prepared:", {
       ...variables,
-      // mask phone for log
       transferNumber: variables.transferNumber
         ? "****" + String(variables.transferNumber).slice(-4)
         : null,
     });
 
-    // Call trigger
-    const callResult = await triggerSingleCall(
-      phoneNumber,
-      variables,
-      finalCampaignId,
-    );
+    const bonvoiceProgram = "INSURANCE_RENEWAL";
 
-    const callId = callResult?.callId || callResult?.calls?.[0]?.callId;
-    const calledPhone =
-      callResult?.phoneNumber ||
-      callResult?.calls?.[0]?.phoneNumber ||
-      phoneNumber;
+    // ✅ CALL BONVOICE (UPDATED: 2-step so callId mil jaye)
+    const leadPayload = {
+      name: variables.callee_name,
+      phone: phoneNumber,
+      email: null,
+      company: variables.showroom_name,
+      program: bonvoiceProgram,
 
-    // Save call log
+      column1: String(row.MST_UTD),
+      column2: variables.vehicle_number,
+      column3: variables.insurance_expiry_date,
+      column7: variables.transferNumber
+    };
+
+    const callOptions = {
+      promptName: bonvoicePromptName,
+      program: bonvoiceProgram,
+    };
+
+    // NOTE: createLeadThenTriggerCall ko aapke bonvoice helper se import hona chahiye
+    // const { createLeadThenTriggerCall } = require("...");
+
+    const callResult = await createLeadThenTriggerCall(leadPayload, callOptions);
+
+    const bonvoiceLeadId = callResult?.leadId || null;
+    const callId = callResult?.callId || null;
+    const calledPhone = phoneNumber;
+
+    console.log("[RENEWAL] Bonvoice call triggered:", {
+      leadId: bonvoiceLeadId,
+      callId: callId,
+      phone: calledPhone,
+    });
+
+    // ✅ Save leadId in FOLLOWUP_DETAILS for webhook reference
+    if (bonvoiceLeadId) {
+      try {
+        await sequelize.query(
+          `INSERT INTO dbo.FOLLOWUP_DETAILS
+           (TRAN_ID, bonvoice_lead_id, FOLLOWUP_STATUS, FOLLOWUP_DATE, CREATED_AT)
+           VALUES (:tranId, :leadId, 'AI_CALL_INITIATED', GETDATE(), GETDATE())`,
+          {
+            replacements: {
+              tranId: row.MST_UTD,
+              leadId: bonvoiceLeadId,
+            },
+            type: QueryTypes.INSERT,
+          }
+        );
+        console.log("[RENEWAL] Bonvoice leadId saved:", bonvoiceLeadId);
+      } catch (fuErr) {
+        console.warn("[RENEWAL] leadId save failed:", fuErr?.message);
+      }
+    }
+
+    // ✅ NEW: Save callId ↔ leadId mapping for webhook enrichment
     if (callId) {
       try {
-        // 1) Save to call_Id_dtl
+        const mergeMapSql = `
+          MERGE dbo.call_webhook_dtl AS T
+          USING (SELECT :call_id AS call_id) AS S
+          ON T.call_id = S.call_id
+          WHEN MATCHED THEN
+            UPDATE SET
+              lead_id      = ISNULL(:lead_id, T.lead_id),
+              phone_number = ISNULL(:phone_number, T.phone_number),
+              callee_name  = ISNULL(:callee_name, T.callee_name),
+              campaign_id  = ISNULL(:campaign_id, T.campaign_id)
+          WHEN NOT MATCHED THEN
+            INSERT (call_id, lead_id, phone_number, callee_name, campaign_id, created_at)
+            VALUES (:call_id, :lead_id, :phone_number, :callee_name, :campaign_id, GETDATE());
+        `;
+
+        await sequelize.query(mergeMapSql, {
+          replacements: {
+            call_id: String(callId).trim(),
+            lead_id: bonvoiceLeadId ? String(bonvoiceLeadId).trim() : null,
+            phone_number: String(calledPhone).substring(0, 15),
+            callee_name: variables.callee_name
+              ? String(variables.callee_name).substring(0, 100)
+              : null,
+            campaign_id: bonvoicePromptName
+              ? String(bonvoicePromptName).substring(0, 100)
+              : null,
+          },
+          type: QueryTypes.RAW,
+        });
+
+        console.log("[RENEWAL] call_webhook_dtl mapping saved:", {
+          callId,
+          bonvoiceLeadId,
+        });
+      } catch (mapErr) {
+        console.warn(
+          "[RENEWAL] call_webhook_dtl mapping save failed:",
+          mapErr?.message
+        );
+      }
+
+      // existing call log
+      try {
         await sequelize.query(
           `INSERT INTO dbo.call_Id_dtl (mob_no, call_id, call_type)
            VALUES (:mob_no, :call_id, 'INSURANCE_RENEWAL')`,
           {
             replacements: { mob_no: calledPhone, call_id: callId },
             type: QueryTypes.INSERT,
-          },
+          }
         );
-
-        // 2) Initial save to call_webhook_dtl
-        await saveCallWebhookDetails(sequelize, callId, {
-          campaignId: finalCampaignId,
-          phoneNumber: calledPhone,
-          calleeName: variables.callee_name || null,
-          status: 'INITIATED',
-          direction: 'outbound',
-          triggeredAt: new Date(),
-          startTime: new Date(),
-          category: 'INSURANCE_RENEWAL',
-        });
-
-        // 3) Save to FOLLOWUP_DETAILS so it links with calling history
-        const mstUtd = row.MST_UTD || row.TRAN_ID;
-        const expType = row.EXPORT_TYPE != null ? Number(row.EXPORT_TYPE) : 1;
-
-        if (mstUtd) {
-          await sequelize.query(
-            `INSERT INTO dbo.FOLLOWUP_DETAILS (
-              TRAN_ID,
-              EXPORT_TYPE,
-              FOLLOWUP_STATUS,
-              FOLLOWUP_DATE,
-              FOLLOWUP_TIME,
-              LAST_FOLLOWUP_DATE,
-              REMARKS,
-              CALL_ID
-             ) VALUES (
-              :tranId,
-              :exportType,
-              'AI_CALL_INITIATED',
-              CAST(GETDATE() AS date),
-              CAST(GETDATE() AS time),
-              CAST(GETDATE() AS date),
-              'AI Call triggered manually',
-              :callId
-             )`,
-            {
-              replacements: {
-                tranId: mstUtd,
-                exportType: expType,
-                callId: String(callId),
-              },
-              type: QueryTypes.INSERT,
-            },
-          );
-          console.log("[RENEWAL] Saved callId to FOLLOWUP_DETAILS:", callId);
-        }
       } catch (logErr) {
-        console.error("[RENEWAL] Call log or followup save failed:", logErr?.message);
+        console.error("[RENEWAL] Call log save failed:", logErr?.message);
       }
     }
-
-    // =========================================================
-    // ✅ AUTO WHATSAPP: Call trigger ke baad wait kro, call complete
-    //    ho jae tb hi WhatsApp message bhejo
-    // =========================================================
-    setImmediate(async () => {
-      let bgSeq;
-      try {
-        console.log("[RENEWAL] WhatsApp & status sync process started in background");
-        bgSeq = await dbname(req, req.headers.compcode);
-
-        // ✅ Call ke status check kro - complete/ended/finished ho gaya ya nahi
-        const checkCallStatus = async (cId, maxAttempts = 60) => {
-          let attempts = 0;
-
-          while (attempts < maxAttempts) {
-            try {
-              // API se call status check kro
-              const statusResult = await getCallStatus1(cId);
-
-              console.log(`[RENEWAL] Call Status Check (Attempt ${attempts + 1}/${maxAttempts}):`, {
-                callId: cId,
-                status: statusResult?.status,
-                duration: statusResult?.duration,
-              });
-
-              if (statusResult && bgSeq) {
-                await saveCallWebhookDetails(bgSeq, cId, {
-                  ...statusResult,
-                  phoneNumber: calledPhone,
-                  calleeName: variables.callee_name || null,
-                  campaignId: finalCampaignId,
-                });
-              }
-
-              const st = String(statusResult?.status || '').toUpperCase();
-
-              // ✅ Call complete/ended/finished ho gaya to return kro
-              if (['COMPLETED', 'ENDED', 'FINISHED', 'FAILED', 'BUSY', 'NO_ANSWER', 'CANCELED'].includes(st)) {
-                console.log("[RENEWAL] ✅ Call Status:", statusResult?.status, "- Checking summary & Proceeding");
-
-                // Agar call complete hui par summary nahi aayi, 1-2 brief retries karo taaki Callmatic summary process kar sake
-                if (['COMPLETED', 'ENDED', 'FINISHED'].includes(st) && !statusResult?.summary) {
-                  for (let sAttempt = 1; sAttempt <= 3; sAttempt++) {
-                    await new Promise(resolve => setTimeout(resolve, 3000));
-                    try {
-                      const retryRes = await getCallStatus1(cId);
-                      if (retryRes && bgSeq) {
-                        await saveCallWebhookDetails(bgSeq, cId, {
-                          ...retryRes,
-                          phoneNumber: calledPhone,
-                          calleeName: variables.callee_name || null,
-                          campaignId: finalCampaignId,
-                        });
-                      }
-                      if (retryRes?.summary || retryRes?.analysis?.summary || retryRes?.call_analysis?.summary) {
-                        console.log(`[RENEWAL] ✅ Summary received on retry attempt ${sAttempt}`);
-                        break;
-                      }
-                    } catch (e) {
-                      // ignore retry error
-                    }
-                  }
-                }
-
-                return {
-                  success: true,
-                  status: statusResult?.status,
-                  duration: statusResult?.duration,
-                };
-              }
-
-              // Agar call still ringing/active hai to wait kro
-              if (['RINGING', 'ACTIVE', 'IN_PROGRESS', 'INITIATED', 'QUEUED'].includes(st)) {
-                console.log(`[RENEWAL] Call still ${statusResult?.status}... waiting...`);
-              }
-
-              // 2 second wait kro phir se check kro
-              await new Promise(resolve => setTimeout(resolve, 2000));
-              attempts++;
-            } catch (checkErr) {
-              console.error(`[RENEWAL] Status check error (Attempt ${attempts + 1}):`, checkErr?.message);
-              attempts++;
-              // Error aaye to 2 second wait kro
-              await new Promise(resolve => setTimeout(resolve, 2000));
-            }
-          }
-
-          // Max attempts ho gaye
-          console.log("[RENEWAL] ⚠️ Max status check attempts reached (120 seconds timeout)");
-          return {
-            success: false,
-            status: 'TIMEOUT',
-            message: 'Call status check timeout - WhatsApp abhi bhejenge'
-          };
-        };
-
-        // ✅ WAIT FOR CALL TO COMPLETE
-        console.log("[RENEWAL] Waiting for call to complete...");
-        if (callId) {
-          const callStatusResult = await checkCallStatus(callId);
-
-          console.log("[RENEWAL] Call Status Result:", {
-            success: callStatusResult?.success,
-            status: callStatusResult?.status,
-            message: callStatusResult?.message,
-          });
-
-          // ✅ Agar call complete nahi hua to wait kro additional 5 seconds
-          if (!callStatusResult?.success) {
-            console.log("[RENEWAL] Waiting additional 5 seconds before sending WhatsApp...");
-            await new Promise(resolve => setTimeout(resolve, 5000));
-          }
-        }
-
-        // ✅ NOW SEND WHATSAPP (jab call complete ho gaya)
-        console.log("[RENEWAL] 🔔 Calling SendInsuranceRenewalWhatsAppToCustomer...");
-
-        const compcode = req.headers.compcode;
-        const mstUtd = row.MST_UTD;
-
-        const reqObj = {
-          headers: { compcode },
-          body: { tranIds: [Number(mstUtd)] },
-        };
-
-        let waResult;
-        const resObj = {
-          status: (code) => ({
-            send: (data) => {
-              waResult = { statusCode: code, data };
-              return waResult;
-            },
-            json: (data) => {
-              waResult = { statusCode: code, data };
-              return waResult;
-            },
-          }),
-        };
-
-        await exports.SendInsuranceRenewalWhatsAppToCustomer(reqObj, resObj);
-
-        console.log("[RENEWAL] ✅ Auto-WhatsApp completed via SendInsuranceRenewalWhatsAppToCustomer:", {
-          compcode,
-          mstUtd,
-          callId: callId || null,
-          waResult,
-          timestamp: new Date().toISOString(),
-        });
-
-      } catch (waErr) {
-        console.error("[RENEWAL] ❌ Auto-WhatsApp failed:", {
-          error: waErr?.message || waErr,
-          code: waErr?.code,
-          timestamp: new Date().toISOString(),
-        });
-      } finally {
-        if (bgSeq) {
-          try {
-            await bgSeq.close();
-          } catch (_) { }
-        }
-      }
-    });
 
     return res.status(200).send({
       success: true,
       message: "Insurance Renewal AI Call Triggered Successfully",
       data: callResult,
       variables,
+      bonvoice: {
+        leadId: bonvoiceLeadId,
+        callId: callId,
+        callStatus: callResult?.call?.callStatus || callResult?.callStatus || null,
+        promptName: bonvoicePromptName,
+        program: bonvoiceProgram,
+      },
       renewal: {
         UTD: row.UTD,
         TRAN_ID: row.TRAN_ID,
@@ -5834,10 +5841,7 @@ exports.makeInsuranceRenewalCall = async function (req, res) {
         POLICY_NUMBER: row.POLICY_NUMBER,
         POLICY_END_DATE: row.POLICY_END_DATE,
         callId: callId || null,
-        // ✅ Show model source for transparency
         MODEL_NAME_SOURCE: row.MODEL_NAME ? "DB" : "FALLBACK",
-        // ✅ Show transfer number source for transparency
-        TRANSFER_NUMBER_SOURCE: row.DSC_NO ? "DSC_NO" : "SALES_EXECUTIVE_NO",
       },
     });
   } catch (err) {
@@ -5845,12 +5849,13 @@ exports.makeInsuranceRenewalCall = async function (req, res) {
     return res.status(500).send({
       success: false,
       message: err?.message || "Server error",
+      debug: err?.data || null,
     });
   } finally {
     if (sequelize) {
       try {
         await sequelize.close();
-      } catch (_) { }
+      } catch (_) {}
     }
   }
 };
