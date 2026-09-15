@@ -6,7 +6,7 @@ const bodyParser = require("body-parser");
 const path = require("path");
 const filesystem = require("fs");
 const Crmrouter=require('./api/Crm')
-const hrrouter=require('./api/hr')
+const interviewrouter=require('./api/interview')
 
 const { authenticateUser } = require("./middleware/auth");
 const cors = require("cors");
@@ -32,7 +32,7 @@ const cookieParser = require("cookie-parser");
 const { startInsuranceFollowupCron } = require("./routes/insuranceFollowup.cron");
 startInsuranceFollowupCron();
 
-app.use(cors({ origin: true }));
+app.use(cors({ origin: true })); 
 app.use(cookieParser())
 
 app.use(bodyParser.json({ limit: "100mb" })); // Adjust the limit as needed
@@ -113,7 +113,7 @@ app.use("/users", user);
 app.use("/demo-car-appointment", demoCarAppointment);
 app.use("/check-schedular",demoCarSchedular)
 app.use('/Crm',Crmrouter)
-app.use('/hr',hrrouter)
+app.use('/interview',interviewrouter)
 app.use("/test-cron", require("./api/cronRunNow"));
 
 
