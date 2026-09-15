@@ -1,5 +1,6 @@
 const { Sequelize, DataTypes, Op } = require("sequelize");
 const { dbname } = require("../utils/dbconfig");
+const { v4: uuidv4 } = require("uuid")
 
 /**
  * ══════════════════════════════════════════════════════════════════════════════
@@ -1711,5 +1712,333 @@ exports.getNeedsYouToday = async (req, res) => {
     if (sequelize) await sequelize.close();
   }
 };
+
+
+exports.gethrentry = async function (req, res) {
+  let sequelize;
+  try {
+    sequelize = await dbname(req, req.headers.compcode);
+
+    const branch = await sequelize.query(
+      `SELECT *,(select top 1 misc_name from misc_mst where misc_Code = NEW_JOINING.loc_code and misc_type = 85) as locationname FROM NEW_JOINING order by tran_id desc;`,
+    );
+
+    const cardData = await sequelize.query(
+      `SELECT 
+        DESIGNATION,
+        (SELECT TOP 1 misc_name FROM misc_mst WHERE misc_Code = MIN(NEW_JOINING.loc_code) AND misc_type = 85) AS locationname,
+        MIN(NEW_JOINING.loc_code) AS loc_code,
+        COUNT(*) AS total,
+        SUM(CASE WHEN ADDRESS IS NOT NULL AND LTRIM(RTRIM(ADDRESS)) <> '' THEN 1 ELSE 0 END) AS filled,
+        SUM(CASE WHEN ADDRESS IS NULL OR LTRIM(RTRIM(ADDRESS)) = '' THEN 1 ELSE 0 END) AS pending,
+        CASE 
+          WHEN COUNT(*) > 0 AND SUM(CASE WHEN ADDRESS IS NOT NULL AND LTRIM(RTRIM(ADDRESS)) <> '' THEN 1 ELSE 0 END) = COUNT(*) THEN 'Filled'
+          ELSE 'Open'
+        END AS status
+      FROM NEW_JOINING 
+      WHERE DESIGNATION IS NOT NULL AND LTRIM(RTRIM(DESIGNATION)) <> ''
+      GROUP BY DESIGNATION
+      ORDER BY total DESC;`,
+    );
+
+    res.status(200).send({
+      data: branch[0],
+      cardData: cardData[0]
+    });
+  } catch (e) {
+    console.log(e);
+    res.status(500).send({ message: e.message });
+  } finally {
+    if (sequelize) {
+      await sequelize.close();
+    }
+  }
+};
+
+exports.interviewcanidates = async function (req, res) {
+  let sequelize;
+  try {
+    sequelize = await dbname(req, req.headers.compcode);
+    const { loc_code } = req.body;
+
+    // Location filter safely handle karein
+    let locCondition = "";
+    if (loc_code !== undefined && loc_code !== null && String(loc_code).trim() !== "") {
+      const formattedLocs = String(loc_code)
+        .split(",")
+        .map((l) => `'${l.trim()}'`)
+        .join(",");
+      locCondition = `AND LOC_CODE IN (${formattedLocs})`;
+    }
+
+    const branch = await sequelize.query(`
+SELECT
+    nj.CITY as CITY1,
+    nj.REJECTED_BY,
+    CAST(nj.REJECTION_DATE AS DATE) as REJECTION_DATE,
+    (select top 1 Misc_Name from Misc_Mst where Misc_Code = nj.STATE and Misc_Type = 3) AS STATE1,
+    (select top 1 Misc_Name from Misc_Mst where Misc_Code = nj.RELIGION and Misc_Type = 603) AS RELIGION1,
+    (select top 1 Misc_Name from Misc_Mst where Misc_Code = nj.LOC_CODE and Misc_Type = 85) AS LOC_CODE1,
+    CONVERT(varchar, nj.APPLICATION_DATE, 105) as APPLICATION_DATE1,
+    CONVERT(varchar, nj.DOB, 105) as DOB1,
+    CONVERT(varchar, nj.DOM, 105) as DOM1,
+    (select top 1 CONCAT(em1.empfirstname, ' ', em1.emplastname) from EMPLOYEEMASTER em1 where em1.EMPCODE=nj.INTR1BY) as employeename1,
+    (select top 1 CONCAT(em2.empfirstname, ' ', em2.emplastname) from EMPLOYEEMASTER em2 where em2.EMPCODE=nj.INTR2BY) as employeename2,
+    (select top 1 CONCAT(em3.empfirstname, ' ', em3.emplastname) from EMPLOYEEMASTER em3 where em3.EMPCODE=nj.INTR3BY) as employeename3,
+    (select top 1 CONCAT(em4.empfirstname, ' ', em4.emplastname) from EMPLOYEEMASTER em4 where em4.EMPCODE=nj.INTR4BY) as employeename4,
+    nj.*
+FROM
+    NEW_JOINING nj
+WHERE
+    1=1
+    ${locCondition}
+ORDER BY 
+    nj.TRAN_ID DESC
+`);
+
+    const SRNOS = branch[0].map((abcd) => abcd.TRAN_ID);
+    if (!SRNOS?.length) {
+      return res.status(200).send([]);
+    }
+    const interviewSideData = await sequelize.query(
+      `SELECT * FROM Interview_SideTables where SRNO in (${SRNOS.join(",")})`,
+    );
+    const ImageData = await sequelize.query(
+      `select * from DOC_UPLOAD where Doc_Type='NCR' and Export_type < 3 and TRAN_ID in (${SRNOS.join(
+        ",",
+      )})`,
+    );
+
+    const fieldsToKeepByType = {
+      1: [
+        // EmpExperience
+        "Emp_Company",
+        "Emp_Designation",
+        "Emp_Responsibility",
+        "Emp_From_Date",
+        "Emp_To_Date",
+        "Emp_Settlement_Done",
+        "Emp_Drawn_Salary",
+        "Emp_Leaving_Reason",
+      ],
+      2: [
+        // EmpEdu
+        "Emp_Degree",
+        "Emp_Board",
+        "Emp_College",
+        "Emp_Passing_year",
+        "Emp_Percentage",
+      ],
+      3: [
+        // EmpItSkill
+        "Emp_Tool",
+        "Emp_Version",
+        "Emp_Proficiency",
+        "Emp_Last_Used",
+        "Emp_Experience",
+      ],
+      4: [
+        // EmpLang
+        "Emp_Language",
+        "Emp_Language_Understand",
+        "Emp_Language_Speak",
+        "Emp_Language_Read",
+        "Emp_Language_Write",
+      ],
+      5: [
+        // References
+        "Emp_Ref_Name",
+        "Emp_Ref_Occup",
+        "Emp_Ref_Address",
+        "Emp_Ref_Mobile",
+        "Emp_Ref_emailid",
+        "Emp_Ref_relation",
+      ],
+      6: [
+        // EmpNominee
+        "Nominee_Name",
+        "Member_Name",
+        "Relation",
+        "Percentage",
+        "Is_Minor",
+      ],
+    };
+
+    const Tbl_Type = {
+      EmpExperience: 1,
+      EmpEdu: 2,
+      EmpItSkill: 3,
+      EmpLang: 4,
+      References: 5,
+      EmpNominee: 6,
+    };
+
+    const processDataForAllSRNOs = (interviewData, ImageData) => {
+      // Grouping the data by SRNO
+      const groupedData = interviewData.reduce((acc, row) => {
+        const { SRNO, Tbl_Type, ...rest } = row;
+        const fieldsToKeep = fieldsToKeepByType[Tbl_Type] || [];
+
+        // Filter out null values and keep only relevant fields
+        const filteredData = fieldsToKeep.reduce((obj, field) => {
+          if (rest[field] !== null && rest[field] !== undefined) {
+            obj[field] = rest[field];
+          }
+          return obj;
+        }, {});
+
+        // Only push if there is any relevant data
+        if (Object.keys(filteredData).length > 0) {
+          if (!acc[SRNO]) {
+            acc[SRNO] = {
+              EmpEdu: [],
+              EmpLang: [],
+              EmpItSkill: [],
+              EmpExperience: [],
+              References: [],
+              EmpFamily: [],
+              EmpNominee: [],
+            };
+          }
+
+          // Mapping data to the correct array based on Tbl_Type
+          switch (Tbl_Type) {
+            case 1:
+              acc[SRNO].EmpExperience.push(filteredData);
+              break;
+            case 2:
+              acc[SRNO].EmpEdu.push(filteredData);
+              break;
+            case 3:
+              acc[SRNO].EmpItSkill.push(filteredData);
+              break;
+            case 4:
+              acc[SRNO].EmpLang.push(filteredData);
+              break;
+            case 5:
+              acc[SRNO].References.push(filteredData);
+              break;
+            case 6:
+              acc[SRNO].EmpNominee.push(filteredData);
+              break;
+          }
+        }
+
+        return acc;
+      }, {});
+
+      const groupedImageData = ImageData.reduce((acc, row) => {
+        const { TRAN_ID, ...imageFields } = row;
+
+        // Ensure there is an array to store images for each SRNO
+        if (!acc[TRAN_ID]) {
+          acc[TRAN_ID] = [];
+        }
+
+        // Push the image data into the array
+        acc[TRAN_ID].push(imageFields);
+
+        return acc;
+      }, {});
+
+      // Convert groupedData into an array if needed
+      const finalData = branch[0].map((srno) => ({
+        ...srno,
+        ...groupedData[srno.TRAN_ID],
+        IMAGES: groupedImageData[srno.TRAN_ID],
+      }));
+
+      return finalData;
+    };
+
+    // Call the function and get the processed data
+    const result = processDataForAllSRNOs(interviewSideData[0], ImageData[0]);
+
+    res.status(200).send(result);
+  } catch (e) {
+    console.log(e);
+    return res.status(500).send({ message: "Error" });
+  } finally {
+    if (sequelize) {
+      await sequelize.close();
+    }
+  }
+};
+
+exports.shortlistcandidate = async function (req, res) {
+  let sequelize;
+  let t;
+  try {
+    if (!req.body.tran_id) {
+      return res.status(400).send({
+        status: false,
+        message: "tran_id is mandatory",
+      });
+    }
+    sequelize = await dbname(req, req.headers.compcode);
+    t = await sequelize.transaction();
+
+    const randomUUID = uuidv4();
+
+    await sequelize.query(
+      `
+      UPDATE NEW_JOINING
+      SET int_status = 2, unique_id = '${randomUUID}'
+      WHERE tran_id = ${req.body.tran_id}
+    `,
+      { transaction: t },
+    );
+
+    await sequelize.query(
+      `
+      INSERT INTO SHORTLISTED_CANDIDATE (
+        SKILLS, SRNO, EMPFIRSTNAME, MOBILE_NO, MOBILENO, CURRENTADDRESS1,
+        PPINCODE, pState, PCITY, BASICQUALIFICATION, FATHERNAME,
+        GENDER, MOTHERNAME, LOCATION, EMPLOYEEDESIGNATION, ALTERNET_MAIL,
+        UID_NO, DOB, DOM, Export_Type, EMPCODE, SERVERid ,
+         CREATED_BY, CREATED_ON , CLUSTER , CHANNEL,SUB_SOURCE,SOURCE_OF_REG
+      )
+      SELECT
+        nj.SKILLS, nj.tran_id, nj.NAME, nj.MOB_NO, nj.WHATSAPP_NO, nj.ADDRESS,
+        nj.PINCODE, nj.STATE, '', nj.HIGH_QUAL, nj.FATHERS_NAME,
+        nj.GENDER, nj.MOTHERS_NAME, nj.LOC_CODE, nj.DESIGNATION,
+        nj.EMAIL, nj.AADHAR_NO, nj.DOB, nj.DOM, nj.INT_status, '', '' ,
+        '${req.headers?.name}' , getDate() , nj.CLUSTER,nj.CHANNEL,nj.SUB_SOURCE,nj.SOURCE_OF_REG
+      FROM NEW_JOINING nj
+      WHERE nj.tran_id = ${req.body.tran_id}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM SHORTLISTED_CANDIDATE sc
+        WHERE sc.srno = nj.tran_id
+      )
+    `,
+      { transaction: t },
+    );
+
+    await t.commit();
+    return res.status(200).send({
+      status: true,
+      title: "Success",
+      icon: "success",
+      msg: "Application Shortlisted Successfully",
+    });
+  } catch (e) {
+    // ❌ Rollback if anything fails
+    if (t) await t.rollback();
+
+    console.error("❌ shortlistcandidate error:", e);
+    return res.status(500).send({
+      status: false,
+      title: "Error",
+      icon: "error",
+      message: e.message || "Failed to shortlist candidate",
+    });
+  } finally {
+    if (sequelize) await sequelize.close();
+  }
+};
+
+
+
 
 
