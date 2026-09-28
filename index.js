@@ -16,6 +16,7 @@ const indexApi = require("./api/indexApi");
 const branch = require("./api/branch");
 const demoCarAppointment = require("./api/demoCarAppointment");
 const demoCarSchedular = require("./api/DemoCarAppointmentsSchedularApi")
+const templaterouter=require("./api/template")
 
 const errorLogger = require("./errorLogger");
 
@@ -115,6 +116,7 @@ app.use("/check-schedular",demoCarSchedular)
 app.use('/Crm',Crmrouter)
 app.use('/interview',interviewrouter)
 app.use("/test-cron", require("./api/cronRunNow"));
+app.use("/template",templaterouter)
 
 
 
