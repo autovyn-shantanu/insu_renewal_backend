@@ -3545,3 +3545,4 @@ exports.CandidateDashboard = async function (req, res) {
     if (sequelize) await sequelize.close();
   }
 };
+  

@@ -53,7 +53,8 @@ router.post('/SaveInsuranceCustomerResponse', Crm.SaveInsuranceCustomerResponse)
 router.post('/customer-responses', Crm.getCustomerInsuranceResponses);
 // router.post('/getDSEOwnTasks', excel.getDSEOwnTasks);
 // router.post('/getReportingManagerTeamTasks', excel.getReportingManagerTeamTasks);
+router.post('/insertLeaveMispunchPolicy',Crm.insertLeaveMispunchPolicy)
+router.post('/getLeaveMispunchPolicies', Crm.getLeaveMispunchPolicies);
+router.get('/getLeaveMispunchPolicies', Crm.getLeaveMispunchPolicies);
 
-
-
-module.exports = router;
+module.exports = router;

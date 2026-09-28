@@ -25,6 +25,7 @@ const { QueryTypes } = require("sequelize");
 // const Campain_ID = require("./callmatics");
 const { Insu_Renewal_Raw_Data } = require("../models/Insu_Renewal_Raw_Data")
 const { SendWhatsAppMessgae } = require("./user");
+const { _MiscMst } = require("../models/MiscMst");
 
 exports.downloadInsuranceRenualSampleExcel = async (req, res) => {
   const wb = new ExcelJS.Workbook();
@@ -98,7 +99,7 @@ exports.importInsuRenewalExcel = async function (req, res, next) {
     const excelFile = req.files?.["excel"]?.[0] || req.file;
     if (!excelFile)
       return res.status(400).send({ Message: "No file uploaded" });
-
+    
     const workbook = xlsx.read(excelFile.buffer, {
       type: "buffer",
       cellDates: false,  // ✅ Changed to false (like Warranty)
@@ -10774,6 +10775,627 @@ exports.getCustomerInsuranceResponses = async function (req, res) {
       try {
         await sequelize.close();
       } catch (_) { }
+    }
+  }
+};
+
+
+exports.insertLeaveMispunchPolicy = async function (req, res) {
+  const BodyData = req.body;
+
+  console.log(BodyData, "Leave/Mispunch Policy req.body");
+
+  const {
+    Misc_Name,
+    Misc_Abbr,
+    Misc_Dtl1,
+    Misc_Dtl2,
+    Misc_Dtl3,
+    Misc_Num1,
+    Misc_Num2,
+    Loc_Code,
+    CC_Group,
+    CC_Ledg,
+    Assessable_Column,
+    MIN_VALUE,
+    Continuous_Max,
+    is_carry,
+    dis_back_date,
+    App_Type,
+  } = BodyData;
+
+  // ---------------------------------------------------------
+  // Basic Validation
+  // ---------------------------------------------------------
+
+  if (!Misc_Name || !Misc_Name.trim()) {
+    return res.status(400).send({
+      success: false,
+      message: "Policy Name is required",
+    });
+  }
+
+  if (!Misc_Abbr || !Misc_Abbr.trim()) {
+    return res.status(400).send({
+      success: false,
+      message: "Policy Status is required",
+    });
+  }
+
+  if (
+    Loc_Code === undefined ||
+    Loc_Code === null ||
+    Loc_Code === ""
+  ) {
+    return res.status(400).send({
+      success: false,
+      message: "Location is required",
+    });
+  }
+
+  // ---------------------------------------------------------
+  // App Type
+  //
+  // Mobile App = Export_Type 1
+  // Web App    = Export_Type 2
+  // ---------------------------------------------------------
+
+  let Export_Type;
+
+  if (App_Type === "Mobile App") {
+    Export_Type = 1;
+  } else if (App_Type === "Web App") {
+    Export_Type = 2;
+  } else {
+    return res.status(400).send({
+      success: false,
+      message: "Invalid App_Type. Select Mobile App or Web App.",
+    });
+  }
+
+  // ---------------------------------------------------------
+  // In-Time / Out-Time Status Validation
+  //
+  // Misc_Num1 = In-Time Status
+  // Misc_Num2 = Out-Time Status
+  //
+  // 0 = Actual
+  // 1 = Shift Time
+  // 2 = Not Required
+  // ---------------------------------------------------------
+
+  if (
+    Misc_Num1 !== null &&
+    Misc_Num1 !== undefined &&
+    Misc_Num1 !== "" &&
+    ![0, 1, 2].includes(Number(Misc_Num1))
+  ) {
+    return res.status(400).send({
+      success: false,
+      message:
+        "Invalid Misc_Num1. Allowed values are 0 (Actual), 1 (Shift Time), 2 (Not Required).",
+    });
+  }
+
+  if (
+    Misc_Num2 !== null &&
+    Misc_Num2 !== undefined &&
+    Misc_Num2 !== "" &&
+    ![0, 1, 2].includes(Number(Misc_Num2))
+  ) {
+    return res.status(400).send({
+      success: false,
+      message:
+        "Invalid Misc_Num2. Allowed values are 0 (Actual), 1 (Shift Time), 2 (Not Required).",
+    });
+  }
+
+  // ---------------------------------------------------------
+  // Assessable Column Validation
+  //
+  // NULL = Mispunch
+  // 1    = Full Day Leave
+  // 2    = Half Day Leave
+  // 3    = Full Leave Without Payment
+  // 4    = Half Day Leave Without Pay
+  // ---------------------------------------------------------
+
+  if (
+    Assessable_Column !== null &&
+    Assessable_Column !== undefined &&
+    Assessable_Column !== "" &&
+    ![1, 2, 3, 4].includes(Number(Assessable_Column))
+  ) {
+    return res.status(400).send({
+      success: false,
+      message:
+        "Invalid Assessable_Column. Allowed values are NULL (Mispunch), 1 (Full Day Leave), 2 (Half Day Leave), 3 (Full Leave Without Payment), 4 (Half Day Leave Without Pay).",
+    });
+  }
+
+  // ---------------------------------------------------------
+  // Fixed Misc Type
+  // ---------------------------------------------------------
+
+  const Misc_Type = 92;
+
+  let sequelize;
+  let t;
+
+  try {
+    // -------------------------------------------------------
+    // Database Connection
+    // -------------------------------------------------------
+
+    sequelize = await dbname(req, req.headers.compcode);
+
+    console.log("Database connection successful");
+
+    // -------------------------------------------------------
+    // Start Transaction
+    // -------------------------------------------------------
+
+    t = await sequelize.transaction();
+
+    console.log("Transaction started");
+
+    // -------------------------------------------------------
+    // Duplicate Policy Check
+    // Same Policy Name + Same Location
+    // -------------------------------------------------------
+
+    const [Check] = await sequelize.query(
+      `
+      SELECT Misc_Code
+      FROM Misc_Mst
+      WHERE
+        UPPER(LTRIM(RTRIM(Misc_Name))) =
+        UPPER(LTRIM(RTRIM(:Misc_Name)))
+        AND Misc_Type = :Misc_Type
+        AND Loc_Code = :Loc_Code
+        AND ISNULL(Export_Type, 0) <> 33
+      `,
+      {
+        replacements: {
+          Misc_Name: Misc_Name.trim(),
+          Misc_Type: Misc_Type,
+          Loc_Code: Number(Loc_Code),
+        },
+        transaction: t,
+      }
+    );
+
+    if (Check.length > 0) {
+      await t.rollback();
+
+      return res.status(409).send({
+        success: false,
+        message: "This Leave/Mispunch Policy Already Exist",
+      });
+    }
+
+    // -------------------------------------------------------
+    // Generate Misc_Code
+    //
+    // Misc_Code is NOT an identity column.
+    // Therefore API will generate it manually.
+    // -------------------------------------------------------
+
+    const [MaxCodeResult] = await sequelize.query(
+      `
+      SELECT ISNULL(MAX(Misc_Code), 0) AS MaxMiscCode
+      FROM Misc_Mst
+      WHERE Misc_Type = :Misc_Type
+      `,
+      {
+        replacements: {
+          Misc_Type: Misc_Type,
+        },
+        transaction: t,
+      }
+    );
+
+    const newMiscCode =
+      Number(MaxCodeResult[0]?.MaxMiscCode || 0) + 1;
+
+    console.log("Generated Misc_Code:", newMiscCode);
+
+    // -------------------------------------------------------
+    // Prepare Assessable Column
+    // -------------------------------------------------------
+
+    let assessableValue = null;
+
+    if (
+      Assessable_Column !== null &&
+      Assessable_Column !== undefined &&
+      Assessable_Column !== ""
+    ) {
+      assessableValue = Number(Assessable_Column);
+    }
+
+    // -------------------------------------------------------
+    // Prepare In-Time Status
+    //
+    // Misc_Num1:
+    // 0 = Actual
+    // 1 = Shift Time
+    // 2 = Not Required
+    // -------------------------------------------------------
+
+    let miscNum1Value = null;
+
+    if (
+      Misc_Num1 !== null &&
+      Misc_Num1 !== undefined &&
+      Misc_Num1 !== ""
+    ) {
+      miscNum1Value = Number(Misc_Num1);
+    }
+
+    // -------------------------------------------------------
+    // Prepare Out-Time Status
+    //
+    // Misc_Num2:
+    // 0 = Actual
+    // 1 = Shift Time
+    // 2 = Not Required
+    // -------------------------------------------------------
+
+    let miscNum2Value = null;
+
+    if (
+      Misc_Num2 !== null &&
+      Misc_Num2 !== undefined &&
+      Misc_Num2 !== ""
+    ) {
+      miscNum2Value = Number(Misc_Num2);
+    }
+
+    // -------------------------------------------------------
+    // Prepare Nullable Values
+    // -------------------------------------------------------
+
+    const miscDtl1 =
+      Misc_Dtl1 !== undefined &&
+      Misc_Dtl1 !== null &&
+      Misc_Dtl1 !== ""
+        ? Misc_Dtl1
+        : null;
+
+    const miscDtl2 =
+      Misc_Dtl2 !== undefined &&
+      Misc_Dtl2 !== null &&
+      Misc_Dtl2 !== ""
+        ? Misc_Dtl2
+        : null;
+
+    const miscDtl3 =
+      Misc_Dtl3 !== undefined &&
+      Misc_Dtl3 !== null &&
+      Misc_Dtl3 !== ""
+        ? Misc_Dtl3
+        : null;
+
+    const ccGroup =
+      CC_Group !== undefined &&
+      CC_Group !== null &&
+      CC_Group !== ""
+        ? CC_Group
+        : null;
+
+    const ccLedg =
+      CC_Ledg !== undefined &&
+      CC_Ledg !== null &&
+      CC_Ledg !== ""
+        ? CC_Ledg
+        : null;
+
+    const minValue =
+      MIN_VALUE !== undefined &&
+      MIN_VALUE !== null &&
+      MIN_VALUE !== ""
+        ? MIN_VALUE
+        : null;
+
+    const continuousMax =
+      Continuous_Max !== undefined &&
+      Continuous_Max !== null &&
+      Continuous_Max !== ""
+        ? Continuous_Max
+        : null;
+
+    const isCarry =
+      is_carry !== undefined &&
+      is_carry !== null &&
+      is_carry !== ""
+        ? is_carry
+        : null;
+
+    const disBackDate =
+      dis_back_date !== undefined &&
+      dis_back_date !== null &&
+      dis_back_date !== ""
+        ? dis_back_date
+        : null;
+
+    // -------------------------------------------------------
+    // INSERT
+    //
+    // Misc_Code -> Manually inserted
+    // UTD       -> NOT inserted because it is IDENTITY
+    //
+    // Export_Type:
+    // Mobile App = 1
+    // Web App    = 2
+    //
+    // Misc_Num1:
+    // In-Time Status
+    //
+    // Misc_Num2:
+    // Out-Time Status
+    // -------------------------------------------------------
+
+    console.log("Starting Misc_Mst insert");
+
+    await sequelize.query(
+      `
+      INSERT INTO Misc_Mst
+      (
+        Misc_Type,
+        Misc_Code,
+        Misc_Name,
+        Misc_Abbr,
+        Misc_Dtl1,
+        Misc_Dtl2,
+        Misc_Dtl3,
+        Misc_Num1,
+        Misc_Num2,
+        CC_Group,
+        CC_Ledg,
+        Assessable_Column,
+        MIN_VALUE,
+        Continuous_Max,
+        is_carry,
+        dis_back_date,
+        Export_Type,
+        ServerId,
+        Loc_code
+      )
+      VALUES
+      (
+        :Misc_Type,
+        :Misc_Code,
+        :Misc_Name,
+        :Misc_Abbr,
+        :Misc_Dtl1,
+        :Misc_Dtl2,
+        :Misc_Dtl3,
+        :Misc_Num1,
+        :Misc_Num2,
+        :CC_Group,
+        :CC_Ledg,
+        :Assessable_Column,
+        :MIN_VALUE,
+        :Continuous_Max,
+        :is_carry,
+        :dis_back_date,
+        :Export_Type,
+        1,
+        :Loc_code
+      )
+      `,
+      {
+        replacements: {
+          Misc_Type: Misc_Type,
+
+          Misc_Code: newMiscCode,
+
+          Misc_Name: Misc_Name.trim().toUpperCase(),
+
+          Misc_Abbr: Misc_Abbr.trim(),
+
+          Misc_Dtl1: miscDtl1,
+
+          Misc_Dtl2: miscDtl2,
+
+          Misc_Dtl3: miscDtl3,
+
+          // In-Time Status
+          Misc_Num1: miscNum1Value,
+
+          // Out-Time Status
+          Misc_Num2: miscNum2Value,
+
+          CC_Group: ccGroup,
+
+          CC_Ledg: ccLedg,
+
+          Assessable_Column: assessableValue,
+
+          MIN_VALUE: minValue,
+
+          Continuous_Max: continuousMax,
+
+          is_carry: isCarry,
+
+          dis_back_date: disBackDate,
+
+          Export_Type: Export_Type,
+
+          Loc_code: Number(Loc_Code),
+        },
+
+        transaction: t,
+
+        logging: console.log,
+      }
+    );
+
+    console.log("Misc_Mst insert successful");
+
+    // -------------------------------------------------------
+    // Commit
+    // -------------------------------------------------------
+
+    await t.commit();
+
+    console.log("Transaction committed successfully");
+
+    // -------------------------------------------------------
+    // Success Response
+    // -------------------------------------------------------
+
+    return res.status(200).send({
+      success: true,
+      message: "Leave/Mispunch Policy Saved Successfully",
+
+      data: {
+        Misc_Type: Misc_Type,
+
+        Misc_Code: newMiscCode,
+
+        Misc_Name: Misc_Name.trim().toUpperCase(),
+
+        Misc_Abbr: Misc_Abbr.trim(),
+
+        Loc_Code: Number(Loc_Code),
+
+        // In-Time Status
+        Misc_Num1: miscNum1Value,
+
+        // Out-Time Status
+        Misc_Num2: miscNum2Value,
+
+        Assessable_Column: assessableValue,
+
+        MIN_VALUE: minValue,
+
+        Continuous_Max: continuousMax,
+
+        is_carry: isCarry,
+
+        dis_back_date: disBackDate,
+
+        Export_Type: Export_Type,
+      },
+    });
+  } catch (error) {
+    // -------------------------------------------------------
+    // Error Logging
+    // -------------------------------------------------------
+
+    console.log("========================================");
+    console.log("insertLeaveMispunchPolicy ERROR");
+    console.log("========================================");
+
+    console.log("Error Name:", error?.name);
+    console.log("Error Message:", error?.message);
+    console.log("Error SQL:", error?.sql);
+    console.log("Error Parent:", error?.parent);
+    console.log("Error Original:", error?.original);
+    console.log("Error Stack:", error?.stack);
+
+    // -------------------------------------------------------
+    // Rollback
+    // -------------------------------------------------------
+
+    if (t) {
+      try {
+        await t.rollback();
+        console.log("Transaction rollback successful");
+      } catch (rollbackError) {
+        console.log(
+          "Transaction rollback error:",
+          rollbackError
+        );
+      }
+    }
+
+    return res.status(500).send({
+      success: false,
+      message:
+        "An error occurred while creating Leave/Mispunch Policy.",
+      error: error?.message || "Unknown database error",
+      sql: error?.sql || null,
+    });
+  } finally {
+    // -------------------------------------------------------
+    // Close Connection
+    // -------------------------------------------------------
+
+    if (sequelize) {
+      await sequelize.close();
+      console.log("Connection has been closed.");
+    }
+  }
+};
+
+// ============================================================
+// GET LEAVE / MISPUNCH POLICIES
+// ============================================================
+exports.getLeaveMispunchPolicies = async function (req, res) {
+  let sequelize;
+  try {
+    sequelize = await dbname(req, req.headers.compcode);
+
+    const Loc_Code = req.body?.Loc_Code || req.query?.Loc_Code || null;
+
+    let query = `
+      SELECT 
+        M.UTD,
+        M.Misc_Type,
+        M.Misc_Code,
+        M.Misc_Name,
+        M.Misc_Abbr,
+        M.Misc_Dtl1,
+        M.Misc_Dtl2,
+        M.Misc_Dtl3,
+        M.Misc_Num1,
+        M.Misc_Num2,
+        M.CC_Group,
+        M.CC_Ledg,
+        M.Assessable_Column,
+        M.MIN_VALUE,
+        M.Continuous_Max,
+        M.is_carry,
+        M.dis_back_date,
+        M.Export_Type,
+        M.Loc_code,
+        (SELECT TOP 1 Godw_Name FROM Godown_Mst WHERE Godw_Code = M.Loc_code) AS Loc_Name
+      FROM Misc_Mst M WITH (NOLOCK)
+      WHERE M.Misc_Type = 92
+        AND ISNULL(M.Export_Type, 0) <> 33
+    `;
+
+    const replacements = {};
+
+    if (Loc_Code) {
+      query += ` AND M.Loc_code = :Loc_Code`;
+      replacements.Loc_Code = Number(Loc_Code);
+    }
+
+    query += ` ORDER BY M.UTD DESC`;
+
+    const [results] = await sequelize.query(query, { replacements });
+
+    return res.status(200).send({
+      success: true,
+      message: "Leave/Mispunch Policies fetched successfully",
+      data: results,
+    });
+  } catch (error) {
+    console.log("========================================");
+    console.log("getLeaveMispunchPolicies ERROR:", error);
+    console.log("========================================");
+    return res.status(500).send({
+      success: false,
+      message: "An error occurred while fetching Leave/Mispunch Policies.",
+      error: error?.message || "Unknown database error",
+    });
+  } finally {
+    if (sequelize) {
+      await sequelize.close();
     }
   }
 };
